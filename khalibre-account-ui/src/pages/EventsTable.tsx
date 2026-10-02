@@ -346,7 +346,8 @@ export const EventsTable = ({
               )}
             </div>
           </div>
-          <p className="pf-v5-u-font-weight-normal pf-v5-u-color-200 pf-v5-u-align-self-end">
+          <p
+            className={`pf-v5-u-font-weight-normal pf-v5-u-color-200 pf-v5-u-align-self-end ${styles.edcInfo}`}>
             {t("accountActivitiesEdcKeeps90days")}
           </p>
         </div>

@@ -52,37 +52,9 @@
   }
 }
 
-.searchInput {
-  min-width: 20rem;
-  border: 1px solid var(--border-input);
-  border-radius: var(--border-radius-md);
-  background-color: var(--edc-card);
-
-
-  &::before {
-    border-style: none;
-  }
-
-  &::after {
-    border: none;
-  }
-
-  > :is(input, select, textarea):focus {
-    outline: none;
-  }
-
-  input {
-    padding: 0.5rem 1rem;
-  }
-}
-
-.dayFilter {
-  min-width: 180px;
-  background-color: var(--edc-card);
-}
-
 .filterPanelWrap {
   position: relative;
+  width: 100%;
 }
 
 .filterPanel {
@@ -106,11 +78,11 @@
   border-bottom: 1px solid var(--border-sidebar);
 }
 
-
 .menuToggle {
   border: 1px solid var(--border-input);
   border-radius: var(--border-radius-md);
   padding: 0.5rem 1rem;
+  width: 15rem;
 
   &::before {
     border-style: none;
@@ -214,4 +186,17 @@
   .filterPanel {
     width: 22.5rem;
   }
+
+  .toolbar {
+    display: block;
+
+    .edcInfo {
+      padding: 1rem 1rem 0 1rem;
+    }
+
+    .menuToggle {
+      width: 100%;
+    }
+  }
+
 }
