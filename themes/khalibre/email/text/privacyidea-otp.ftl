@@ -1,14 +1,17 @@
 <#ftl output_format="plainText">
-${msg("otpEmailBrand")} — ${msg("otpEmailSecurityLabel")}
-
-${msg("otpEmailHello", user.firstname?has_content?then(user.firstname, user.username))}
+${msg("otpEmailBrand")}
+${msg("otpEmailBrandSubtitle")}
 
 ${msg("otpEmailHeading")}
 
-    ${msg("otpEmailCodeLabel")}: ${otp}
+${msg("otpEmailIntro", user.firstname?has_content?then(user.firstname, user.username), appName)}
 
-${msg("otpEmailExpiry", expiryMinutes)}
+${msg("otpEmailCodeLabel")}: ${otp}
+
+${msg("otpEmailValid", expiryMinutes)}
+${msg("otpEmailRequestedAt", requestDate, requestTime, clientIp)}
 
 ${msg("otpEmailNotice")}
 
-${msg("otpEmailFooter", realmName)}
+${msg("otpEmailFooterAutomated")}
+${msg("otpEmailFooterOrg")}

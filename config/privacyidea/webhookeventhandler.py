@@ -25,6 +25,7 @@ from privacyidea.lib.eventhandler.base import BaseEventHandler
 from privacyidea.lib import _
 import json
 import logging
+from datetime import datetime
 import requests
 from requests.exceptions import HTTPError, Timeout, ConnectionError, RequestException
 from privacyidea.lib.user import User
@@ -152,6 +153,8 @@ class WebHookHandler(BaseEventHandler):
             surname = tokenowner.info.get("surname") if tokenowner else ""
             given_name = tokenowner.info.get("givenname") if tokenowner else ""
             user_realm = tokenowner.realm if tokenowner else ""
+            date_tag = datetime.now().strftime("%d %B %Y")
+            time_tag = datetime.now().strftime("%H:%M")
 
             try:
                 attributes = {
@@ -160,16 +163,28 @@ class WebHookHandler(BaseEventHandler):
                     "surname": surname,
                     "token_owner": given_name,
                     "user_realm": user_realm,
-                    "token_serial": token_serial
+                    "token_serial": token_serial,
+                    # 3.12.2 exposes none of these. The Keycloak provider forwards the
+                    # end user's browser IP as the "client" request parameter when its
+                    # piforwardclientip option is enabled, so it is available here.
+                    "client_ip": (request.all_data.get("client") or g.client_ip or "") if request else "",
+                    "user_agent": (request.user_agent.string or "") if request and request.user_agent else "",
+                    "date": date_tag,
+                    "time": time_tag,
                 }
                 if content_type == CONTENT_TYPE.JSON:
+                    # 3.12.2 returned from inside the loop, so only the first top-level key
+                    # survived and any other field was silently dropped. This is the upstream
+                    # implementation, which accumulates every key and also handles lists.
                     def replace_recursive(val):
-                        for k, v in val.items():
-                            k = k.format(**attributes)
-                            if isinstance(v, dict):
-                                return {k: replace_recursive(v)}
-                            else:
-                                return {k: v.format(**attributes)}
+                        if isinstance(val, dict):
+                            return {k.format(**attributes): replace_recursive(v) for k, v in val.items()}
+                        elif isinstance(val, list):
+                            return [replace_recursive(item) for item in val]
+                        elif isinstance(val, str):
+                            return val.format(**attributes)
+                        else:
+                            return val
 
                     new_json = replace_recursive(json.loads(webhook_text))
                     webhook_text = json.dumps(new_json)

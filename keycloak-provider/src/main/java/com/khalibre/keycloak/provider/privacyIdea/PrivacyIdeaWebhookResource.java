@@ -17,9 +17,12 @@ import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.time.Instant;
 import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.time.ZoneOffset;
+import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
+import java.util.Locale;
 import java.util.List;
 import java.util.Map;
 import org.apache.http.HttpStatus;
@@ -42,6 +45,16 @@ public class PrivacyIdeaWebhookResource implements RealmResourceProvider {
    * Probed in order so the field can be renamed in privacyIDEA without a code change.
    */
   private static final List<String> USERNAME_FIELDS = List.of("username", "logged_in_user");
+
+  private static final List<String> CLIENT_IP_FIELDS = List.of("client_ip", "client", "ip");
+
+  private static final ZoneId OTP_TIME_ZONE = ZoneId.systemDefault();
+
+  private static final DateTimeFormatter OTP_DATE_FORMAT =
+      DateTimeFormatter.ofPattern("d MMMM yyyy", Locale.ENGLISH);
+
+  private static final DateTimeFormatter OTP_TIME_FORMAT =
+      DateTimeFormatter.ofPattern("HH:mm");
 
   private static final DateTimeFormatter OTP_EXPIRY_FORMAT =
       DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ssxxx");
@@ -117,7 +130,7 @@ public class PrivacyIdeaWebhookResource implements RealmResourceProvider {
       setPrivacyIdeaPinExpiry(tokenSerial, adminAuthToken);
 
       // 5. Send OTP Email using Keycloak's Email Service
-      sendOtpEmail(realm, user, otpCode);
+      sendOtpEmail(realm, user, otpCode, extractClientIp(body));
 
       log.infof("method=processIpn status=SUCCESS username=%s serial=%s", username, tokenSerial);
       // Must carry an entity: Keycloak rejects a body-less response with status 200, see
@@ -138,23 +151,36 @@ public class PrivacyIdeaWebhookResource implements RealmResourceProvider {
    * {@code application/json} Content-Type, and calling {@code HttpHeaders#getMediaType()} on the
    * bare {@code json} value older privacyIDEA builds send throws IllegalArgumentException.
    */
-  private String extractUsername(String body) {
+  private String extractField(String body, List<String> fields) {
     if (body == null || body.isBlank()) {
       return null;
     }
 
     try {
       JsonNode root = objectMapper.readTree(body);
-      for (String field : USERNAME_FIELDS) {
+      for (String field : fields) {
         JsonNode node = root.get(field);
         if (node != null && node.isValueNode() && !node.asText().isBlank()) {
           return node.asText();
         }
       }
     } catch (Exception e) {
-      log.error("method=extractUsername message=Malformed JSON payload body=" + body, e);
+      log.error("method=extractField message=Malformed JSON payload body=" + body, e);
     }
     return null;
+  }
+
+  private String extractUsername(String body) {
+    return extractField(body, USERNAME_FIELDS);
+  }
+
+  /**
+   * privacyIDEA forwards the end user's browser IP as {@code client_ip} when the Keycloak
+   * provider's piforwardclientip option is enabled.
+   */
+  private String extractClientIp(String body) {
+    String ip = extractField(body, CLIENT_IP_FIELDS);
+    return ip == null || ip.isBlank() ? "unknown" : ip;
   }
 
   private void setPrivacyIdeaPin(String serial, String otpCode, String adminToken)
@@ -197,7 +223,7 @@ public class PrivacyIdeaWebhookResource implements RealmResourceProvider {
     }
   }
 
-  private void sendOtpEmail(RealmModel realm, UserModel user, String otpCode)
+  private void sendOtpEmail(RealmModel realm, UserModel user, String otpCode, String clientIp)
       throws EmailException {
     EmailTemplateProvider emailProvider = session.getProvider(EmailTemplateProvider.class);
     emailProvider.setRealm(realm);
@@ -207,9 +233,19 @@ public class PrivacyIdeaWebhookResource implements RealmResourceProvider {
     // Keycloak renders text/<template> and html/<template> from the realm's email theme; both are
     // provided by themes/khalibre/email. The map must be mutable: processTemplate adds locale,
     // msg, properties, realmName, user and url to it.
+    ZonedDateTime issuedAt = ZonedDateTime.now(OTP_TIME_ZONE);
     Map<String, Object> attributes = new HashMap<>();
     attributes.put("otp", otpCode);
+    // Grouped in threes so a mistyped digit is obvious, e.g. 492 718.
+    attributes.put("otpFormatted",
+        otpCode.replaceFirst("^(\\p{Digit}{3})(\\p{Digit}{3})$", "$1\u2002$2"));
     attributes.put("expiryMinutes", spassExpiryMinutes);
+    attributes.put("requestDate", issuedAt.format(OTP_DATE_FORMAT));
+    attributes.put("requestTime", issuedAt.format(OTP_TIME_FORMAT));
+    attributes.put("clientIp", clientIp);
+    attributes.put("appName", realm.getDisplayName() != null && !realm.getDisplayName().isBlank()
+        ? realm.getDisplayName()
+        : realm.getName());
     emailProvider.send("otpEmailSubject", "privacyidea-otp.ftl", attributes);
   }
 
