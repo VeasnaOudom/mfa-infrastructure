@@ -31,6 +31,7 @@ public final class PrivacyIdeaSettings {
   public static final String KEY_ADMIN_PASSWORD = "piAdminPassword";
   public static final String KEY_WEBHOOK_SECRET = "webhookSecret";
   public static final String KEY_EXPIRY_MINUTES = "spassExpiryMinutes";
+  public static final String KEY_CHALLENGE_TTL_MINUTES = "challengeTtlMinutes";
 
   /** Provider id of the execution whose configuration holds the canonical values. */
   private static final String OWNING_PROVIDER_ID = "edc-mfa-channels";
@@ -45,7 +46,9 @@ public final class PrivacyIdeaSettings {
         pick(admin, KEY_ADMIN_USERNAME, "PI_ADMIN_USER", "admin"),
         pick(admin, KEY_ADMIN_PASSWORD, "PI_ADMIN_PASSWORD", "secret"),
         pick(admin, KEY_WEBHOOK_SECRET, "PRIVACYIDEA_WEBHOOK_SECRET", ""),
-        parseInt(pick(admin, KEY_EXPIRY_MINUTES, null, "5"), 5));
+        parseInt(pick(admin, KEY_EXPIRY_MINUTES, null, "5"), 5),
+        parseInt(pick(admin, KEY_CHALLENGE_TTL_MINUTES, "PRIVACYIDEA_CHALLENGE_TTL_MINUTES", "30"),
+            30));
   }
 
   /**
@@ -120,7 +123,7 @@ public final class PrivacyIdeaSettings {
 
   /** Immutable snapshot of the resolved settings. */
   public record Settings(String baseUrl, String adminUsername, String adminPassword,
-      String webhookSecret, int spassExpiryMinutes) {
+      String webhookSecret, int spassExpiryMinutes, int challengeTtlMinutes) {
 
     public String baseUrlTrimmed() {
       return baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
@@ -128,6 +131,15 @@ public final class PrivacyIdeaSettings {
 
     public boolean hasSecret() {
       return webhookSecret != null && !webhookSecret.isBlank();
+    }
+
+    /**
+     * How long the browser's challenge proof stays valid. Deliberately independent of the OTP
+     * validity: it asserts "this browser passed the first factor", not "this code is still fresh",
+     * so it has to outlive the code or "Send a new code" breaks exactly when it is needed.
+     */
+    public int challengeTtlSeconds() {
+      return Math.max(120, challengeTtlMinutes * 60);
     }
   }
 }

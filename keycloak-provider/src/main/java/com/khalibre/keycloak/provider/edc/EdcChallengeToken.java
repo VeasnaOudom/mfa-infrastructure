@@ -85,6 +85,17 @@ public final class EdcChallengeToken {
     return username;
   }
 
+  /**
+   * Builds the {@code Set-Cookie} header for the challenge proof. Kept here so the authenticator
+   * and the resend endpoint emit an identical cookie.
+   */
+  public static String cookieHeader(String realmName, String token, int ttlSeconds) {
+    return EdcMfaChannelsAuthenticator.CHALLENGE_COOKIE + "=" + token
+        + "; Path=/realms/" + realmName + "/"
+        + "; Max-Age=" + ttlSeconds
+        + "; HttpOnly; SameSite=Lax";
+  }
+
   /** Milliseconds since the epoch when {@code token} was issued, or -1 if it is not valid. */
   public static long issuedAtMillis(String token, String secret) {
     if (token == null || secret == null) {

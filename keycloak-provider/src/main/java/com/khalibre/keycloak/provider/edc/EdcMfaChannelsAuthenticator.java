@@ -84,11 +84,8 @@ public class EdcMfaChannelsAuthenticator implements org.keycloak.authentication.
     if (token == null) {
       return;
     }
-    String cookie = CHALLENGE_COOKIE + "=" + token
-        + "; Path=/realms/" + realm.getName() + "/"
-        + "; Max-Age=" + challengeTtlSeconds
-        + "; HttpOnly; SameSite=Lax";
-    session.getContext().getHttpResponse().addHeader("Set-Cookie", cookie);
+    session.getContext().getHttpResponse().addHeader("Set-Cookie",
+        EdcChallengeToken.cookieHeader(realm.getName(), token, challengeTtlSeconds));
   }
 
   @Override

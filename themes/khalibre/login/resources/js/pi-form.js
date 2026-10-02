@@ -304,7 +304,7 @@ var EDC_ICONS = {
     email: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m2 7 10 6 10-6"/></svg>'
 };
 
-function edcChannelRow(icon, name, detail, state, stateClass) {
+function edcChannelRow(icon, name, detail, state) {
     var row = document.createElement("div");
     row.className = "edc-channel";
     var ico = document.createElement("span");
@@ -324,7 +324,7 @@ function edcChannelRow(icon, name, detail, state, stateClass) {
         body.appendChild(detailEl);
     }
     var stateEl = document.createElement("span");
-    stateEl.className = "edc-channel-state " + stateClass;
+    stateEl.className = "edc-channel-state edc-state-sent";
     stateEl.textContent = state;
     row.appendChild(ico);
     row.appendChild(body);
@@ -348,7 +348,10 @@ function edcFetchChannels() {
     return window.fetch(base + "/privacyidea/channels",
         {credentials: "same-origin", headers: {"Accept": "application/json"}})
         .then(function (response) {
-            return response.ok ? response.json() : null;
+            if (!response.ok) {
+                return null;
+            }
+            return response.json();
         })
         .catch(function () {
             return null;
@@ -371,15 +374,15 @@ function edcRenderChannels(data) {
             handle = "@" + handle;
         }
         rows.push(edcChannelRow(EDC_ICONS.telegram, host.dataset.telegram, handle,
-            host.dataset.sent, "edc-state-sent"));
+            host.dataset.sent));
     }
     if (data.totp) {
         rows.push(edcChannelRow(EDC_ICONS.totp, host.dataset.authenticator,
-            host.dataset.authenticatorDetail, host.dataset.available, "edc-state-available"));
+            host.dataset.authenticatorDetail, host.dataset.available));
     }
     if (data.email) {
         rows.push(edcChannelRow(EDC_ICONS.email, host.dataset.email,
-            data.emailMasked || "", host.dataset.sent, "edc-state-sent"));
+            data.emailMasked || "", host.dataset.sent));
     }
     host.innerHTML = "";
     rows.forEach(function (row) { host.appendChild(row); });
@@ -499,11 +502,27 @@ function edcInitOtpBoxes() {
 var edcCountdownTimer = null;
 
 /** Replaces any running countdown so timers cannot stack up. */
+function edcShowCodeExpired() {
+    var notice = document.getElementById("edcOtpExpired");
+    if (notice) {
+        notice.hidden = false;
+    }
+}
+
+function edcHideCodeExpired() {
+    var notice = document.getElementById("edcOtpExpired");
+    if (notice) {
+        notice.hidden = true;
+    }
+}
+
 function edcStartCountdown(deadlineMs) {
     var label = document.getElementById("edcOtpExpiryText");
     if (!label) {
         return;
     }
+    // A new code means a fresh countdown, so retract any expiry notice.
+    edcHideCodeExpired();
     if (edcCountdownTimer !== null) {
         window.clearInterval(edcCountdownTimer);
         edcCountdownTimer = null;
@@ -514,6 +533,9 @@ function edcStartCountdown(deadlineMs) {
         var minutes = Math.floor(left / 60);
         var seconds = left % 60;
         label.textContent = minutes + ":" + (seconds < 10 ? "0" : "") + seconds;
+        if (left === 0) {
+            edcShowCodeExpired();
+        }
     };
     tick();
     edcCountdownTimer = window.setInterval(tick, 1000);

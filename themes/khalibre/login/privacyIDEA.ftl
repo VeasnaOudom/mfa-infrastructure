@@ -175,6 +175,14 @@
                                         ${msg('edc.otp.resend')}
                                     </button>
                                 </div>
+                                <div class="edc-otp-note edc-otp-expired" id="edcOtpExpired" hidden>
+                                    <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M12 2 1 21h22L12 2zm1 14h-2v2h2v-2zm0-6h-2v5h2v-5z"/></svg>
+                                    <span>${msg('edc.otp.expired')}</span>
+                                    <button type="button" class="edc-otp-expired-action"
+                                            onclick="document.querySelector('#edcOtpResend').click()">
+                                        ${msg('edc.otp.getNewCode')}
+                                    </button>
+                                </div>
                                 <div class="edc-otp-note">
                                     <span>${msg('edc.otp.neverShare')}</span>
                                 </div>

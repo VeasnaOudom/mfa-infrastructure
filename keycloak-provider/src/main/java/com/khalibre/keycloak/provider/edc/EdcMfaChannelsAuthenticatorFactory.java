@@ -41,7 +41,7 @@ public class EdcMfaChannelsAuthenticatorFactory
         new PrivacyIdeaService(settings.baseUrlTrimmed(), settings.adminUsername(),
             settings.adminPassword()),
         settings.webhookSecret(),
-        Math.max(60, settings.spassExpiryMinutes() * 60));
+        settings.challengeTtlSeconds());
   }
 
   @Override
@@ -120,6 +120,15 @@ public class EdcMfaChannelsAuthenticatorFactory
         .helpText("Validity of a generated one-time code.")
         .type(ProviderConfigProperty.INTEGER_TYPE)
         .defaultValue(5)
+        .add()
+        .property()
+        .name(PrivacyIdeaSettings.KEY_CHALLENGE_TTL_MINUTES)
+        .label("Challenge Session (minutes)")
+        .helpText("How long the OTP page may keep reading channels and sending a new code. "
+            + "Keep this longer than the OTP expiry, otherwise the page goes dead as the code "
+            + "expires. Falls back to PRIVACYIDEA_CHALLENGE_TTL_MINUTES.")
+        .type(ProviderConfigProperty.INTEGER_TYPE)
+        .defaultValue(30)
         .add()
         .build();
   }
