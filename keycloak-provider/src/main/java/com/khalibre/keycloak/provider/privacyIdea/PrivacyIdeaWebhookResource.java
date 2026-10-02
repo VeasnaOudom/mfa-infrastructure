@@ -2,16 +2,16 @@ package com.khalibre.keycloak.provider.privacyIdea;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.khalibre.keycloak.provider.edc.EdcChannelDetector;
 import com.khalibre.keycloak.provider.edc.EdcChallengeToken;
+import com.khalibre.keycloak.provider.edc.EdcChannelDetector;
 import com.khalibre.keycloak.provider.edc.EdcMfaChannelsAuthenticator;
 import com.khalibre.keycloak.provider.privacyIdea.service.PrivacyIdeaService;
 import com.khalibre.keycloak.provider.telegram.TelegramBotClient;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.GET;
 import jakarta.ws.rs.POST;
-import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.Path;
+import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
@@ -42,7 +42,6 @@ import org.keycloak.models.IdentityProviderModel;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.RealmModel;
 import org.keycloak.models.UserModel;
-import org.keycloak.sessions.AuthenticationSessionModel;
 import org.keycloak.services.resource.RealmResourceProvider;
 
 public class PrivacyIdeaWebhookResource implements RealmResourceProvider {
@@ -73,6 +72,7 @@ public class PrivacyIdeaWebhookResource implements RealmResourceProvider {
       DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ssxxx");
 
   private final KeycloakSession session;
+  private final PrivacyIdeaSettings.Settings settings;
   private final String baseUrl;
   private final String adminUsername;
   private final String adminPassword;
@@ -87,6 +87,7 @@ public class PrivacyIdeaWebhookResource implements RealmResourceProvider {
       int spassExpiryMinutes,
       String webhookSecret) {
     this.session = session;
+    this.settings = PrivacyIdeaSettings.resolve(session);
     this.baseUrl = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
     this.adminUsername = adminUsername;
     this.adminPassword = adminPassword;
@@ -124,7 +125,20 @@ public class PrivacyIdeaWebhookResource implements RealmResourceProvider {
   }
 
   private int challengeTtlSeconds() {
-    return Math.max(60, spassExpiryMinutes * 60);
+    return settings.challengeTtlSeconds();
+  }
+
+  private void refreshChallengeCookie(RealmModel realm, String username) {
+    if (!settings.hasSecret()) {
+      return;
+    }
+    String token =
+        EdcChallengeToken.issue(username, webhookSecret, challengeTtlSeconds());
+    if (token == null) {
+      return;
+    }
+    session.getContext().getHttpResponse().addHeader("Set-Cookie",
+        EdcChallengeToken.cookieHeader(realm.getName(), token, challengeTtlSeconds()));
   }
 
   private boolean secretValid(@QueryParam("secret") String supplied) {
@@ -178,8 +192,13 @@ public class PrivacyIdeaWebhookResource implements RealmResourceProvider {
 
       String tokenSerial = service.getSpassTokenSerial(username, adminAuthToken);
       if (tokenSerial == null || tokenSerial.isBlank()) {
-        log.warnf("method=processIpn message=No active SPASS token found for username=%s", username);
-        return Response.status(Response.Status.NOT_FOUND).build();
+        // Not an error: the user may authenticate with an authenticator app or push token, which
+        // generate their own codes. A 404 here would be recorded as a failed webhook by
+        // privacyIDEA on every such login, so report success-with-nothing-to-deliver instead.
+        log.infof("method=processIpn status=SKIPPED username=%s "
+            + "message=NoActiveSpassTokenDeliveringNothing", username);
+        return Response.ok(Map.of("status", "skipped", "reason", "no-active-spass-token", "username",
+            username), MediaType.APPLICATION_JSON).build();
       }
 
       issueOtp(realm, user, tokenSerial, adminAuthToken, extractClientIp(body));
@@ -257,7 +276,13 @@ public class PrivacyIdeaWebhookResource implements RealmResourceProvider {
     long issuedAt =
         EdcChallengeToken.issuedAtMillis(cookie == null ? null : cookie.getValue(), webhookSecret);
     if (issuedAt > 0) {
-      channels.put("expiresAt", (issuedAt + challengeTtlSeconds() * 1000L) / 1000L);
+      // The countdown must describe the CODE, not the browser's challenge proof. These have
+      // different lifetimes: the code is valid for spassExpiryMinutes, while the challenge cookie
+      // deliberately outlives it so a new code can still be requested once the old one lapses.
+      // issuedAt is in milliseconds; the browser's countdown works in seconds.
+      // 60_000 converts the configured minutes into milliseconds, to match issuedAt.
+      long codeExpiresAt = (issuedAt + spassExpiryMinutes * 60_000L) / 1000L;
+      channels.put("expiresAt", codeExpiresAt);
     }
 
     log.infof("method=channels status=SUCCESS username=%s email=%s totp=%s telegram=%s",
@@ -300,6 +325,9 @@ public class PrivacyIdeaWebhookResource implements RealmResourceProvider {
       }
 
       issueOtp(realm, user, tokenSerial, adminAuthToken, extractClientIp(body));
+      // Sliding the window while the user is actively requesting codes, so someone mid-way
+      // through an MFA session is not cut off while a code is still valid.
+      refreshChallengeCookie(realm, username);
       log.infof("method=resend status=SUCCESS username=%s serial=%s", username, tokenSerial);
       // The code itself is never echoed back, only the fact that a new one was issued.
       return Response.ok(Map.of("status", "ok"), MediaType.APPLICATION_JSON).build();

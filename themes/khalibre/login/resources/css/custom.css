@@ -908,12 +908,42 @@ body.login-pf,
     background: #e2f5ec;
 }
 
-.edc-state-available {
-    color: #2b4a7d;
-    background: #e8eefb;
-}
-
 @media (max-width: 420px) {
     .edc-otp-boxes { gap: 6px; }
     .edc-otp-box { font-size: 20px; }
+}
+
+.edc-otp-expired {
+    color: var(--edc-danger, #c0392b);
+    background: var(--edc-danger-bg, #fdf0ef);
+    border-color: var(--edc-danger-border, #f2c9c4);
+}
+
+.edc-otp-expired a {
+    color: inherit;
+    font-weight: 700;
+    margin-left: 4px;
+}
+
+.edc-otp-expired-action {
+    background: none;
+    border: 0;
+    padding: 0;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 700;
+    color: inherit;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    cursor: pointer;
+}
+
+/*
+ * Several blocks below set display:flex, which beats the browser's default
+ * [hidden] { display: none }. Without this, hiding via the hidden attribute -
+ * which the OTP page relies on for the channel list and the expiry notice -
+ * silently does nothing.
+ */
+[hidden] {
+    display: none !important;
 }
