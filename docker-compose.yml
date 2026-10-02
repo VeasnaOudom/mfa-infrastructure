@@ -113,11 +113,18 @@ services:
       KC_HOSTNAME_STRICT: 'false'
       PI_ADMIN_USER: ${PI_ADMIN_USER}
       PI_ADMIN_PASSWORD: ${PI_ADMIN_PASSWORD}
+      # Shared secret required by the privacyIDEA webhook and resend endpoints
+      PRIVACYIDEA_WEBHOOK_SECRET: ${PRIVACYIDEA_WEBHOOK_SECRET}
+      # Public origin email clients use to load theme assets (logo, images). Must differ per
+      # environment; defaults to https://${KEYCLOAK_HOST} when unset.
+      KEYCLOAK_PUBLIC_BASE_URL: ${KEYCLOAK_PUBLIC_BASE_URL:-}
       # Telegram bot update mode: "polling" (DEV, long-polling) or "webhook" (PRD)
       TELEGRAM_BOT_MODE: ${TELEGRAM_BOT_MODE}
       KC_TRUSTSTORE_PATHS: /opt/keycloak/certs/truststore/root-ca.crt
       # Enable Java remote debugging on port 5005
-      JAVA_OPTS_APPEND: "-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005"
+      # preferIPv4Stack: this host has no global IPv6 route, but api.telegram.org resolves to
+      # an IPv6 address first, which made the Telegram bot fail to reach the API.
+      JAVA_OPTS_APPEND: "-Djava.net.preferIPv4Stack=true -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005"
     ports:
       - "5005:5005"   # Debug port
     ##
