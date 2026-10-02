@@ -1,0 +1,14 @@
+.accountConsolePage {
+  :global(.pf-v5-c-page__main-section) {
+    background-color: var(--edc-bg-account);
+    padding-bottom: 0;
+  }
+
+  :global(.pf-v5-c-masthead) {
+    background-color: var(--edc-navy) !important;
+  }
+
+  :global(.pf-v5-c-masthead__content > .pf-v5-c-toolbar) {
+    background-color: var(--edc-navy) !important;
+  }
+}

@@ -1,44 +1,37 @@
 :root {
-  --edc-primary: #2c327e;
+  --edc-font: "Plus Jakarta Sans", "Segoe UI", -apple-system, BlinkMacSystemFont, Helvetica,
+  Arial, sans-serif;
+  --edc-navy: #2b3072;
+  --edc-navy-hover: #22275c;
+  --edc-navy-soft: #eef0fb;
+  --edc-navy-border: #b9bfee;
+  --edc-ink: #14162b;
+  --edc-body: #5b6478;
+  --edc-muted: #8b94a7;
+  --edc-bg: #f4f5f9;
+  --edc-card: #ffffff;
+  --edc-border: #d7dae2;
+  --edc-amber-bg: #fdf7e6;
+  --edc-amber-bar: #d9a300;
+  --edc-amber-ink: #6b5410;
+  --edc-danger: #c0392b;
+  --edc-danger-bg: #fdf0ef;
+  --edc-danger-border: #f2c9c4;
 
-  --color-dark: var(--pf-v5-global--Color--100);
-  --color-dark-100: var(--pf-v5-global--Color--200);
-  --color-dark-200: var(--pf-v5-global--BorderColor--200);
-  --color-dark-300: var(--pf-v5-global--BorderColor--300);
-  --color-dark-400: var(--pf-v5-global--BorderColor--400);
+  --edc-bg-account: #f0f0f0;
+  --edc-bg-hover: #f2f3f9;
+  --edc-bg-blue-light: #E7F1FA;
 
-  --bg-white: var(--pf-v5-global--BackgroundColor--100);
-  --bg-color: #f0f0f0;
+  --border-sidebar: #D9D9D9;
+  --border-table-row: #ececec;
+  --border-input: #adadad;
 
-  --bg-edc-primary: #f2f3f9;
-  --bg-blue-light: var(--pf-v5-global--palette--blue-50);
+  --text-gray: #6a6e73;
+  --text-black: #151515;
 
-  --text-color: var(--pf-v5-global--Color--200);
-
+  /*Sizing*/
   --border-radius-md: 0.3rem;
-  --border-color-dark-300: var(--pf-v5-global--BorderColor--300);
 
   --space-size-sm: 0.5rem;
   --space-size-md: 1rem;
-
-  --pf-v5-c-page__main-section--m-light--BackgroundColor: var(--bg-color) !important;
-}
-
-.pf-v5-theme-dark {
-  --edc-primary: unset;
-  --pf-v5-c-page__main-section--m-light--BackgroundColor: var(--pf-v5-global--BackgroundColor--200);
-
-  --color-dark: var(--pf-v5-global--Color--100);
-  --color-dark-100: var(--pf-v5-global--Color--200);
-  --color-dark-200: var(--pf-v5-global--BorderColor--100);
-  --color-dark-300: var(--pf-v5-global--BorderColor--200);
-  --color-dark-400: var(--pf-v5-global--BorderColor--300);
-
-  --bg-white: var(--pf-v5-global--BackgroundColor--300);
-  --bg-color: var(--pf-v5-global--BackgroundColor--200);
-
-  --bg-edc-primary: var(--pf-v5-c-nav__link--hover--BackgroundColor);
-  --bg-blue-light: var(--pf-v5-c-nav__link--hover--BackgroundColor);
-
-  --text-color: var(--pf-v5-global--Color--100);
 }
