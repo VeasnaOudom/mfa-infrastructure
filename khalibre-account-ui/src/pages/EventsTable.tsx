@@ -497,10 +497,11 @@ export const EventsTable = ({
             page={page}
             perPage={max}
             widgetId="account-activities-pagination"
+            isCompact
             toggleTemplate={({
-                               firstIndex,
-                               lastIndex,
-                             }: PaginationToggleTemplateProps) => (
+               firstIndex,
+               lastIndex,
+             }: PaginationToggleTemplateProps) => (
               <b>
                 {firstIndex} - {lastIndex}
               </b>
