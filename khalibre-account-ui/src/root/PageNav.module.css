@@ -1,6 +1,6 @@
 .sidebar {
-  border-right: 1px solid var(--color-dark-200);
-  background-color: var(--bg-white);
+  border-right: 1px solid var(--border-sidebar);
+  background-color: var(--edc-card);
 }
 
 .nav {
@@ -10,13 +10,13 @@
   }
 
   :global(.pf-v5-c-nav__link) {
-    color: var(--color-dark);
+    color: var(--text-black);
     background-color: transparent;
     font-weight: 400;
 
     &:hover {
-      color: var(--edc-primary);
-      background-color: var(--bg-edc-primary);
+      color: var(--edc-navy);
+      background-color: var(--edc-bg-hover);
       border-left-color: transparent;
     }
 
@@ -25,11 +25,11 @@
     }
 
     &:global(.pf-m-current) {
-      color: var(--edc-primary);
+      color: var(--edc-navy);
       font-weight: 600;
 
       &::after {
-        border-color: var(--edc-primary);
+        border-color: var(--edc-navy);
         border-inline-start-width: 4px;
       }
     }
@@ -44,7 +44,7 @@
   }
 
   :global(.pf-v5-c-nav__toggle) {
-    color: var(--color-dark);
+    color: var(--text-black);
   }
 
   :global(.pf-v5-c-nav__subnav) {
@@ -55,12 +55,12 @@
 
   :global(.pf-v5-c-nav__item.pf-m-current:not(.pf-m-expanded)) {
     :global(.pf-v5-c-nav__link) {
-      color: var(--edc-primary);
+      color: var(--edc-navy);
       font-weight: 600;
-      background-color: var(--bg-edc-primary);
+      background-color: var(--edc-bg-hover);
 
       &::after {
-        border-color: var(--edc-primary);
+        border-color: var(--edc-navy);
         border-inline-start-width: 4px;
       }
     }
