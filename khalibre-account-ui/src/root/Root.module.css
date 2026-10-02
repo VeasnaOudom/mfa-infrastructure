@@ -1,4 +1,6 @@
 .accountConsolePage {
+  font-family: var(--edc-font);
+
   :global(.pf-v5-c-page__main-section) {
     background-color: var(--edc-bg-account);
     padding-bottom: 0;
