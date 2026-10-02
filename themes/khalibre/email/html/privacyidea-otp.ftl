@@ -12,7 +12,7 @@
             <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
               <tr>
                 <td width="64" valign="middle" style="width:64px;">
-                  <img src="${msg('otpEmailLogoUrl')}" alt="" width="60" height="60" style="width:60px;height:60px;border-radius:50%;display:block;"/>
+                  <img src="${otpEmailBaseUrl}${url.resourcesPath}/img/edc-logo-white.png" alt="logo" width="60" height="60" style="width:60px;height:60px;border-radius:50%;display:block;"/>
                 </td>
                 <td valign="middle" style="padding-left:14px;">
                   <div style="font-size:21px;font-weight:700;color:#ffffff;letter-spacing:0.2px;line-height:1.25;">${msg("otpEmailBrand")}</div>

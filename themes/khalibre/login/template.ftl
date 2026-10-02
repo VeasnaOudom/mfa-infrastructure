@@ -1,5 +1,5 @@
 <#import "footer.ftl" as loginFooter>
-<#macro registrationLayout bodyClass="" displayInfo=false displayMessage=true displayRequiredFields=false>
+<#macro registrationLayout bodyClass="" displayInfo=false displayMessage=false displayRequiredFields=false>
 <!DOCTYPE html>
 <html class="${properties.kcHtmlClass!}" lang="${lang}"<#if realm.internationalizationEnabled> dir="${(locale.rtl)?then('rtl','ltr')}"</#if>>
 
@@ -104,35 +104,38 @@
                 <h1 id="kc-page-title"><#nested "header"></h1>
             </#if>
         <#else>
-            <#if displayRequiredFields>
-                <div class="${properties.kcContentWrapperClass!}">
-                    <div class="${properties.kcLabelWrapperClass!} subtitle">
-                        <span class="subtitle"><span class="required">*</span> ${msg("requiredFields")}</span>
-                    </div>
-                    <div class="col-md-10">
-                        <#nested "show-username">
-                        <div id="kc-username" class="${properties.kcFormGroupClass!}">
-                            <label id="kc-attempted-username">${auth.attemptedUsername}</label>
-                            <a id="reset-login" href="${url.loginRestartFlowUrl}" aria-label="${msg("restartLoginTooltip")}">
-                                <div class="kc-login-tooltip">
-                                    <i class="${properties.kcResetFlowIcon!}"></i>
-                                    <span class="kc-tooltip-text">${msg("restartLoginTooltip")}</span>
-                                </div>
-                            </a>
+            <!-- CUSTOM CODE -->
+            <#if false>
+                <#if displayRequiredFields>
+                    <div class="${properties.kcContentWrapperClass!}">
+                        <div class="${properties.kcLabelWrapperClass!} subtitle">
+                            <span class="subtitle"><span class="required">*</span> ${msg("requiredFields")}</span>
+                        </div>
+                        <div class="col-md-10">
+                            <#nested "show-username">
+                            <div id="kc-username" class="${properties.kcFormGroupClass!}">
+                                <label id="kc-attempted-username">${auth.attemptedUsername}</label>
+                                <a id="reset-login" href="${url.loginRestartFlowUrl}" aria-label="${msg("restartLoginTooltip")}">
+                                    <div class="kc-login-tooltip">
+                                        <i class="${properties.kcResetFlowIcon!}"></i>
+                                        <span class="kc-tooltip-text">${msg("restartLoginTooltip")}</span>
+                                    </div>
+                                </a>
+                            </div>
                         </div>
                     </div>
-                </div>
-            <#else>
-                <#nested "show-username">
-                <div id="kc-username" class="${properties.kcFormGroupClass!}">
-                    <label id="kc-attempted-username">${auth.attemptedUsername}</label>
-                    <a id="reset-login" href="${url.loginRestartFlowUrl}" aria-label="${msg("restartLoginTooltip")}">
-                        <div class="kc-login-tooltip">
-                            <i class="${properties.kcResetFlowIcon!}"></i>
-                            <span class="kc-tooltip-text">${msg("restartLoginTooltip")}</span>
-                        </div>
-                    </a>
-                </div>
+                <#else>
+                    <#nested "show-username">
+                    <div id="kc-username" class="${properties.kcFormGroupClass!}">
+                        <label id="kc-attempted-username">${auth.attemptedUsername}</label>
+                        <a id="reset-login" href="${url.loginRestartFlowUrl}" aria-label="${msg("restartLoginTooltip")}">
+                            <div class="kc-login-tooltip">
+                                <i class="${properties.kcResetFlowIcon!}"></i>
+                                <span class="kc-tooltip-text">${msg("restartLoginTooltip")}</span>
+                            </div>
+                        </a>
+                    </div>
+                </#if>
             </#if>
         </#if>
       </header>

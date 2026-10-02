@@ -18,11 +18,16 @@
     <#elseif section = "header">
         ${msg("loginTitleHtml", (realm.displayName!'')?has_content?then(realm.displayName, realm.name))}
     <#elseif section = "form">
+        <#-- Auth notes are not exposed to FreeMarker (Keycloak binds "authenticationSession" to an
+             id/tabId bean), so the channel list is filled in by JS from the /privacyidea/channels
+             endpoint, which is authorised for this OTP challenge only. -->
+        <#assign isOtpMode = authenticationForm.mode = "otp">
+        <#assign useBoxes = isOtpMode && !(authenticationForm.passkeyRegistration?has_content)>
         <form id="kc-otp-login-form" onsubmit="submitForm();"
               class="${properties.kcFormClass!}"
               action="${url.loginAction}" method="post">
             <div class="${properties.kcFormGroupClass!}">
-                <div class="${properties.kcInputWrapperClass!}">
+                <div>
                     <!-- IMAGES AND PROMPTS -->
                     <!-- Show images if there is no error message, or if push has not been accepted yet -->
                     <#if !authenticationForm.errorMessage?has_content || authenticationForm.errorMessage == "push_auth_not_verified">
@@ -116,6 +121,21 @@
                     <!-- OTP INPUT -->
                     <#if !(["usernamepassword", "username", "push", "passkey", "passkeyonly"]?seq_contains(authenticationForm.mode))
                     &&  !(authenticationForm.passkeyRegistration?has_content)>
+                        <#if useBoxes>
+                            <div class="edc-otp">
+                                <h1 class="edc-otp-title">${msg('edc.otp.enterYourCode')}</h1>
+                                <p class="edc-otp-subtitle">${msg('edc.otp.enterYourCodeDescription')}</p>
+                                <#-- "Where we sent it" chooser. Rows are built by pi-form.js from the
+                                     /privacyidea/channels response so only real channels appear. -->
+                                <div class="edc-channels" id="edcChannels" role="group" hidden
+                                     aria-label="${msg('edc.otp.whereSent')}"
+                                     data-telegram="${msg('edc.otp.telegram')}"
+                                     data-authenticator="${msg('edc.otp.authenticator')}"
+                                     data-authenticator-detail="${msg('edc.otp.authenticatorDetail')}"
+                                     data-email="${msg('edc.otp.email')}"
+                                     data-sent="${msg('edc.otp.sent')}"
+                                     data-available="${msg('edc.otp.available')}"></div>
+                        </#if>
                         <div class="${properties.kcContentWrapperClass!}">
                             <div>
                                 <label for="otp"><span class="${properties.kcLabelClass!}">
@@ -126,9 +146,44 @@
                                         </#if>
                                     </span></label>
                             </div>
+                            <#if useBoxes>
+                                <#-- Six boxes are decorative: JS mirrors them into the single #otp field
+                                     that the privacyIDEA authenticator actually reads. -->
+                                <div class="edc-otp-boxes" id="edcOtpBoxes" data-length="6">
+                                    <input class="edc-otp-box" type="text" inputmode="numeric" pattern="[0-9]*"
+                                           maxlength="1" autocomplete="off" aria-label="${msg('edc.otp.digit', 1)}"/>
+                                    <input class="edc-otp-box" type="text" inputmode="numeric" pattern="[0-9]*"
+                                           maxlength="1" autocomplete="off" aria-label="${msg('edc.otp.digit', 2)}"/>
+                                    <input class="edc-otp-box" type="text" inputmode="numeric" pattern="[0-9]*"
+                                           maxlength="1" autocomplete="off" aria-label="${msg('edc.otp.digit', 3)}"/>
+                                    <input class="edc-otp-box" type="text" inputmode="numeric" pattern="[0-9]*"
+                                           maxlength="1" autocomplete="off" aria-label="${msg('edc.otp.digit', 4)}"/>
+                                    <input class="edc-otp-box" type="text" inputmode="numeric" pattern="[0-9]*"
+                                           maxlength="1" autocomplete="off" aria-label="${msg('edc.otp.digit', 5)}"/>
+                                    <input class="edc-otp-box" type="text" inputmode="numeric" pattern="[0-9]*"
+                                           maxlength="1" autocomplete="off" aria-label="${msg('edc.otp.digit', 6)}"/>
+                                </div>
+                                <div class="edc-otp-foot">
+                                    <span class="edc-otp-expiry" id="edcOtpExpiry">
+                                        <span id="edcOtpExpiryLabel">${msg('edc.otp.expiresInLabel')}</span>
+                                        <span id="edcOtpExpiryText">--:--</span>
+                                    </span>
+                                    <button type="button" class="edc-otp-resend" id="edcOtpResend"
+                                            data-sending="${msg('edc.otp.resending')}"
+                                            data-sent="${msg('edc.otp.resendSent')}"
+                                            data-failed="${msg('edc.otp.resendFailed')}">
+                                        ${msg('edc.otp.resend')}
+                                    </button>
+                                </div>
+                                <div class="edc-otp-note">
+                                    <span>${msg('edc.otp.neverShare')}</span>
+                                </div>
+                            </#if>
                             <div>
-                                <input id="otp" name="otp" type="password" class="${properties.kcInputClass!}"
-                                       value="" autocomplete="new-password" autofocus/>
+                                <input id="otp" name="otp" type="password"
+                                       <#if useBoxes>class="edc-otp-hidden" aria-hidden="true" tabindex="-1"
+                                       <#else>class="${properties.kcInputClass!}" autofocus</#if>
+                                       value="" autocomplete="new-password"/>
                             </div>
                         </div>
                     </#if>
