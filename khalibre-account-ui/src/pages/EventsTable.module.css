@@ -81,6 +81,32 @@
   background-color: var(--edc-card);
 }
 
+.filterPanelWrap {
+  position: relative;
+}
+
+.filterPanel {
+  position: absolute;
+  top: calc(100% + 0.25rem);
+  left: 0;
+  z-index: 200;
+  width: 30rem;
+  padding: 1rem;
+  background-color: var(--edc-card);
+  border: 1px solid var(--border-sidebar);
+  border-radius: var(--border-radius-md);
+  box-shadow: 0 0.25rem 0.75rem rgba(0, 0, 0, 0.15);
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 1rem;
+  border-bottom: 1px solid var(--border-sidebar);
+}
+
+
 .menuToggle {
   border: 1px solid var(--border-input);
   border-radius: var(--border-radius-md);
@@ -173,5 +199,19 @@
   p {
     margin: 0;
     line-height: 1.5;
+  }
+}
+
+@media screen and (max-width: 1200px) {
+  .activityCard {
+    width: auto;
+  }
+
+  .helpBanner {
+    width: auto;
+  }
+
+  .filterPanel {
+    width: 22.5rem;
   }
 }

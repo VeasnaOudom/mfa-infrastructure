@@ -1,24 +1,25 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { AccountEnvironment, Page, useAccountAlerts, useEnvironment } from "@keycloak/keycloak-account-ui";
 import {
-  fetchAccountActivities,
-  type AccountActivity,
-  type DayFilter,
-} from "../api/accountActivities";
-import { EventsTable } from "./EventsTable";
+  AccountEnvironment,
+  Page,
+  useAccountAlerts,
+  useEnvironment
+} from "@keycloak/keycloak-account-ui";
+import { type AccountActivity, fetchAccountActivities, } from "../api/accountActivities";
+import { EMPTY_EVENTS_FILTER, type EventsFilter, EventsTable, } from "./EventsTable";
 
-const PAGE_SIZE = 25;
+const PAGE_SIZE = 10;
 
 export const AccountActivities = () => {
-  const { t } = useTranslation();
+  const {t} = useTranslation();
   const context = useEnvironment<AccountEnvironment>();
-  const { addError } = useAccountAlerts();
+  const {addError} = useAccountAlerts();
 
   const [page, setPage] = useState(1);
-  const [dayFilter, setDayFilter] = useState<DayFilter>("30");
+  const [pageSize, setPageSize] = useState(PAGE_SIZE);
+  const [filter, setFilter] = useState<EventsFilter>(EMPTY_EVENTS_FILTER);
   const [activities, setActivities] = useState<AccountActivity[]>();
-  const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -26,15 +27,18 @@ export const AccountActivities = () => {
     setLoading(true);
 
     fetchAccountActivities(context, {
-      first: (page - 1) * PAGE_SIZE,
-      max: PAGE_SIZE,
-      dayFilter,
+      first: (page - 1) * pageSize,
+      max: pageSize,
+      filter: {
+        type: filter.type,
+        dateFrom: filter.dateFrom || undefined,
+        dateTo: filter.dateTo || undefined,
+        ipAddress: filter.ipAddress || undefined,
+      },
       signal: controller.signal,
     })
       .then((data) => {
         setActivities(data.events);
-        // A short page means there is nothing after it.
-        setHasMore(data.events.length === PAGE_SIZE);
       })
       .catch((e) => {
         if (e instanceof DOMException && e.name === "AbortError") {
@@ -50,10 +54,10 @@ export const AccountActivities = () => {
       });
 
     return () => controller.abort();
-  }, [context, page, dayFilter, t, addError]);
+  }, [context, page, pageSize, filter, t, addError]);
 
-  const onDayFilterChange = useCallback((nextFilter: DayFilter) => {
-    setDayFilter(nextFilter);
+  const onPerPageChange = useCallback((max: number) => {
+    setPageSize(max);
     setPage(1);
   }, []);
 
@@ -65,12 +69,13 @@ export const AccountActivities = () => {
       <EventsTable
         activities={activities ?? []}
         loading={loading}
-        dayFilter={dayFilter}
-        onDayFilter={onDayFilterChange}
-        page={page}
-        pageSize={PAGE_SIZE}
-        hasMore={hasMore}
+        count={activities?.length ?? 0}
+        first={(page - 1) * pageSize}
+        max={pageSize}
         onPage={setPage}
+        activeFilter={filter}
+        onFilter={setFilter}
+        onPerPage={onPerPageChange}
       />
     </Page>
   );

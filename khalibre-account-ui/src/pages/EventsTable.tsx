@@ -1,24 +1,30 @@
 import {
+  ActionGroup,
+  Button,
+  Chip,
+  ChipGroup,
+  DatePicker,
   EmptyState,
   EmptyStateBody,
   EmptyStateHeader,
   EmptyStateVariant,
+  Form,
+  FormGroup,
   Label,
   MenuToggle,
-  MenuToggleElement,
   Pagination,
-  Select,
-  SelectList,
+  PaginationToggleTemplateProps,
   SelectOption,
   Spinner,
   TextInput,
 } from "@patternfly/react-core";
-import { Ref, useMemo, useState } from "react";
+import { KeycloakSelect } from "@keycloak/keycloak-ui-shared";
+import { useEffect, useRef, useState } from "react";
 import { Table, Tbody, Td, Th, Thead, Tr } from "@patternfly/react-table";
 import { useTranslation } from "react-i18next";
 import {
   type AccountActivity,
-  type DayFilter,
+  ALL_EVENT_TYPES,
   eventTypeFallback,
   eventTypeKey,
 } from "../api/accountActivities";
@@ -29,20 +35,14 @@ import styles from "./EventsTable.module.css";
 type EventsTableProps = {
   activities: AccountActivity[];
   loading: boolean;
-  dayFilter: DayFilter;
-  onDayFilter: (filter: DayFilter) => void;
-  page: number;
-  pageSize: number;
-  hasMore: boolean;
+  count: number;
+  first: number;
+  max: number;
   onPage: (page: number) => void;
+  activeFilter: EventsFilter;
+  onFilter: (filter: EventsFilter) => void;
+  onPerPage: (perPage: number) => void;
 };
-
-const DAY_FILTERS: { value: DayFilter; labelKey: string }[] = [
-  {value: "1", labelKey: "accountActivitiesDateFilterLast1Day"},
-  {value: "7", labelKey: "accountActivitiesDateFilterLast7Days"},
-  {value: "30", labelKey: "accountActivitiesDateFilterLast30Days"},
-  {value: "90", labelKey: "accountActivitiesDateFilterLast90Days"},
-];
 
 /** Detail keys rendered as a "Key: value" list. */
 const DETAIL_LABELS: Record<string, string> = {
@@ -52,118 +52,349 @@ const DETAIL_LABELS: Record<string, string> = {
   auth_method_details: "accountActivitiesDetailAuthMethodDetails",
 };
 
+export type EventsFilter = {
+  type: string[];
+  dateFrom: string;
+  dateTo: string;
+  ipAddress: string;
+};
+
+export const EMPTY_EVENTS_FILTER: EventsFilter = {
+  type: [],
+  dateFrom: "",
+  dateTo: "",
+  ipAddress: "",
+};
+
 export const EventsTable = ({
                               activities,
                               loading,
-                              dayFilter,
-                              onDayFilter,
-                              page,
-                              pageSize,
-                              hasMore,
+                              first,
+                              max,
+                              count,
                               onPage,
+                              activeFilter,
+                              onFilter,
+                              onPerPage,
                             }: EventsTableProps) => {
   const {t} = useTranslation();
-  const [query, setQuery] = useState("");
-  const [isFilterOpen, setIsFilterOpen] = useState(false);
 
-  const selectedFilter =
-    DAY_FILTERS.find((filter) => filter.value === dayFilter) ?? DAY_FILTERS[2];
+  const toEventTypeValue = (value: string | number | object) => {
+    if (typeof value === "string" || typeof value === "number") {
+      return String(value);
+    }
 
-  const filteredActivities = useMemo(() => {
-    const lowered = query.trim().toLowerCase();
+    if (
+      typeof value === "object" &&
+      value !== null &&
+      "value" in value &&
+      typeof (value as { value?: unknown }).value !== "undefined"
+    ) {
+      return String((value as { value: unknown }).value);
+    }
 
-    return activities.filter((activity) => {
-      if (!lowered) {
-        return true;
+    return String(value);
+  };
+
+  const [draftFilter, setDraftFilter] = useState<EventsFilter>(activeFilter);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [typeSelectOpen, setTypeSelectOpen] = useState(false);
+
+  const filterLabels: Record<keyof EventsFilter, string> = {
+    type: t("accountActivitiesEventType"),
+    dateFrom: t("accountActivitiesDateFrom"),
+    dateTo: t("accountActivitiesDateTo"),
+    ipAddress: t("accountActivitiesIpAddress"),
+  };
+
+  const hasActiveFilters =
+    activeFilter.type.length > 0 ||
+    activeFilter.dateFrom !== "" ||
+    activeFilter.dateTo !== "" ||
+    activeFilter.ipAddress !== "";
+
+  const isDraftDirty =
+    draftFilter.type.length > 0 ||
+    draftFilter.dateFrom !== "" ||
+    draftFilter.dateTo !== "" ||
+    draftFilter.ipAddress !== "";
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (
+        dropdownRef.current &&
+        !dropdownRef.current.contains(event.target as Node)
+      ) {
+        setSearchOpen(false);
       }
+    };
 
-      const detailsText = Object.entries(activity.details ?? {})
-      .map(([key, value]) => `${key} ${value}`)
-      .join(" ");
-      return [
-        formatDateTime(activity.time),
-        activity.type,
-        activity.clientId ?? "",
-        activity.ipAddress ?? "",
-        activity.error ?? "",
-        detailsText,
-      ]
-      .join(" ")
-      .toLowerCase()
-      .includes(lowered);
-    });
-  }, [activities, query]);
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [setSearchOpen]);
 
-  const showNoData = activities.length === 0;
-  const showNoSearchResults = activities.length > 0 && filteredActivities.length === 0;
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "hidden") {
+        setSearchOpen(false);
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () =>
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }, [setSearchOpen]);
+
+  const eventTypeLabel = (type: string) =>
+    t(eventTypeKey(type), {defaultValue: eventTypeFallback(type)});
+
+  const commitFilters = (filter: EventsFilter) => {
+    onFilter(filter);
+    onPage(1);
+  };
+
+  const onSubmit = () => {
+    setSearchOpen(false);
+    commitFilters(draftFilter);
+  };
+
+  const resetSearch = () => {
+    setDraftFilter(EMPTY_EVENTS_FILTER);
+    commitFilters(EMPTY_EVENTS_FILTER);
+  };
+
+  const removeFilter = (key: keyof EventsFilter) => {
+    const next = {...activeFilter, [key]: EMPTY_EVENTS_FILTER[key]};
+    setDraftFilter((prev) => ({...prev, [key]: EMPTY_EVENTS_FILTER[key]}));
+    commitFilters(next);
+  };
+
+  const removeType = (value: string) => {
+    const next = {
+      ...activeFilter,
+      type: activeFilter.type.filter((item) => item !== value),
+    };
+    setDraftFilter((prev) => ({
+      ...prev,
+      type: prev.type.filter((item) => item !== value),
+    }));
+    commitFilters(next);
+  };
+
+  const showNoData = activities.length === 0 && !hasActiveFilters;
+  const showNoSearchResults = activities.length === 0 && !showNoData;
 
   if (showNoData) {
     return (
-      <>
-        <EmptyState>
-          <EmptyStateHeader
-            titleText={t("accountActivitiesEmptyTitle")}
-          />
-          <EmptyStateBody>
-            {t("accountActivitiesEmpty")}
-          </EmptyStateBody>
-        </EmptyState>
-      </>
+      <EmptyState>
+        <EmptyStateHeader titleText={t("accountActivitiesEmptyTitle")}/>
+        <EmptyStateBody>{t("accountActivitiesEmpty")}</EmptyStateBody>
+      </EmptyState>
     );
   }
 
-  // The total count is not known client-side, so it is derived from what the server returned:
-  // a full page means there may be more after it.
-  const itemCount = hasMore
-    ? page * pageSize + 1
-    : (page - 1) * pageSize + activities.length;
+  // This follows Keycloak's table pattern for unknown totals:
+  // when a page is full, expose one extra item to keep "next page" available.
+  const page = Math.floor(first / max) + 1;
+  const itemCount = first + (count < max ? count : count + 1);
 
   return (
     <>
       <div className={styles.activityCard}>
         <div className={styles.toolbar}>
           <div className={styles.searchFilter}>
-            <TextInput
-              type="search"
-              value={query}
-              onChange={(_event, value) => setQuery(value)}
-              aria-label={t("accountActivitiesSearch")}
-              placeholder={t("accountActivitiesSearch")}
-              className={styles.searchInput}
-            />
-            <Select
-              isOpen={isFilterOpen}
-              selected={dayFilter}
-              onSelect={(_event, value) => {
-                onDayFilter(value as DayFilter);
-                setIsFilterOpen(false);
-              }}
-              onOpenChange={setIsFilterOpen}
-              toggle={(toggleRef: Ref<MenuToggleElement>) => (
-                <MenuToggle
-                  ref={toggleRef}
-                  onClick={() => setIsFilterOpen(!isFilterOpen)}
-                  isExpanded={isFilterOpen}
-                  className={styles.menuToggle}
-                >
-                  {t(selectedFilter.labelKey)}
-                </MenuToggle>
+            <div className={styles.filterPanelWrap} ref={dropdownRef}>
+              <MenuToggle
+                onClick={() => setSearchOpen(!searchOpen)}
+                isExpanded={searchOpen}
+                className={styles.menuToggle}
+              >
+                {t("accountActivitiesSearchEvents")}
+              </MenuToggle>
+              {searchOpen && (
+                <div className={styles.filterPanel}>
+                  <Form
+                    isHorizontal
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      onSubmit();
+                    }}
+                  >
+                    <FormGroup
+                      label={t("accountActivitiesEventType")}
+                      fieldId="kc-eventType"
+                    >
+                      <KeycloakSelect
+                        variant={"typeaheadMulti" as never}
+                        maxHeight={300}
+                        typeAheadAriaLabel={t("accountActivitiesEventType")}
+                        chipGroupProps={{
+                          numChips: 1,
+                          expandedText: t("accountActivitiesHide"),
+                          collapsedText: t("accountActivitiesShowRemaining"),
+                        }}
+                        onToggle={setTypeSelectOpen}
+                        isOpen={typeSelectOpen}
+                        selections={draftFilter.type}
+                        onSelect={(value) => {
+                          const option = toEventTypeValue(value);
+                          if (!option) {
+                            return;
+                          }
+                          setDraftFilter((prev) => ({
+                            ...prev,
+                            type: prev.type.includes(option)
+                              ? prev.type.filter((item) => item !== option)
+                              : [...prev.type, option],
+                          }));
+                        }}
+                        onClear={() =>
+                          setDraftFilter((prev) => ({...prev, type: []}))
+                        }
+                        chipGroupComponent={
+                          <ChipGroup>
+                            {draftFilter.type.map((chip) => (
+                              <Chip
+                                key={chip}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  setDraftFilter((prev) => ({
+                                    ...prev,
+                                    type: prev.type.filter((item) => item !== chip),
+                                  }));
+                                }}
+                              >
+                                {eventTypeLabel(chip)}
+                              </Chip>
+                            ))}
+                          </ChipGroup>
+                        }
+                      >
+                        {ALL_EVENT_TYPES.map((option) => (
+                          <SelectOption
+                            key={option}
+                            value={option}
+                            selected={draftFilter.type.includes(option)}
+                          >
+                            {eventTypeLabel(option)}
+                          </SelectOption>
+                        ))}
+                      </KeycloakSelect>
+                    </FormGroup>
+
+                    <FormGroup
+                      label={t("accountActivitiesDateFrom")}
+                      fieldId="kc-dateFrom"
+                    >
+                      <DatePicker
+                        className="pf-v5-u-w-100"
+                        value={draftFilter.dateFrom}
+                        onChange={(_event, value) =>
+                          setDraftFilter((prev) => ({...prev, dateFrom: value}))
+                        }
+                        inputProps={{id: "kc-dateFrom"}}
+                      />
+                    </FormGroup>
+
+                    <FormGroup
+                      label={t("accountActivitiesDateTo")}
+                      fieldId="kc-dateTo"
+                    >
+                      <DatePicker
+                        className="pf-v5-u-w-100"
+                        value={draftFilter.dateTo}
+                        onChange={(_event, value) =>
+                          setDraftFilter((prev) => ({...prev, dateTo: value}))
+                        }
+                        inputProps={{id: "kc-dateTo"}}
+                      />
+                    </FormGroup>
+
+                    <FormGroup
+                      label={t("accountActivitiesIpAddress")}
+                      fieldId="kc-ipAddress"
+                    >
+                      <TextInput
+                        id="kc-ipAddress"
+                        value={draftFilter.ipAddress}
+                        onChange={(_event, value) =>
+                          setDraftFilter((prev) => ({...prev, ipAddress: value}))
+                        }
+                      />
+                    </FormGroup>
+
+                    <ActionGroup className="pf-v5-u-mt-0">
+                      <Button
+                        variant="primary"
+                        type="submit"
+                        isDisabled={!isDraftDirty}
+                      >
+                        {t("accountActivitiesSearchBtn")}
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        onClick={resetSearch}
+                        isDisabled={!isDraftDirty && !hasActiveFilters}
+                      >
+                        {t("accountActivitiesResetBtn")}
+                      </Button>
+                    </ActionGroup>
+                  </Form>
+                </div>
               )}
-              className={styles.dayFilter}
-            >
-              <SelectList>
-                {DAY_FILTERS.map((item) => (
-                  <SelectOption key={item.value} value={item.value}>
-                    {t(item.labelKey)}
-                  </SelectOption>
-                ))}
-              </SelectList>
-            </Select>
+            </div>
           </div>
           <p className="pf-v5-u-font-weight-normal pf-v5-u-color-200 pf-v5-u-align-self-end">
             {t("accountActivitiesEdcKeeps90days")}
           </p>
         </div>
+
+        {hasActiveFilters && (
+          <div className={styles.chips}>
+            {activeFilter.type.length > 0 && (
+              <ChipGroup
+                categoryName={filterLabels.type}
+                isClosable
+                onClick={() => removeFilter("type")}
+              >
+                {activeFilter.type.map((entry) => (
+                  <Chip key={entry} onClick={() => removeType(entry)}>
+                    {eventTypeLabel(entry)}
+                  </Chip>
+                ))}
+              </ChipGroup>
+            )}
+            {activeFilter.dateFrom !== "" && (
+              <ChipGroup
+                categoryName={filterLabels.dateFrom}
+                isClosable
+                onClick={() => removeFilter("dateFrom")}
+              >
+                <Chip isReadOnly>{activeFilter.dateFrom}</Chip>
+              </ChipGroup>
+            )}
+            {activeFilter.dateTo !== "" && (
+              <ChipGroup
+                categoryName={filterLabels.dateTo}
+                isClosable
+                onClick={() => removeFilter("dateTo")}
+              >
+                <Chip isReadOnly>{activeFilter.dateTo}</Chip>
+              </ChipGroup>
+            )}
+            {activeFilter.ipAddress !== "" && (
+              <ChipGroup
+                categoryName={filterLabels.ipAddress}
+                isClosable
+                onClick={() => removeFilter("ipAddress")}
+              >
+                <Chip isReadOnly>{activeFilter.ipAddress}</Chip>
+              </ChipGroup>
+            )}
+          </div>
+        )}
 
         <div className={styles.tableWrap}>
           <Table aria-label={t("accountActivities")} variant="compact" borders
@@ -190,7 +421,7 @@ export const EventsTable = ({
                   </Td>
                 </Tr>
               ) : (
-                filteredActivities.map((activity, index) => {
+                activities.map((activity, index) => {
                   const typeKey = eventTypeKey(activity.type);
                   const details = Object.entries(activity.details ?? {}).filter(
                     ([key]) => key in DETAIL_LABELS,
@@ -239,7 +470,8 @@ export const EventsTable = ({
                       </Td>
                       <Td style={{verticalAlign: 'middle'}}
                           dataLabel={t("accountActivitiesResult")}>
-                        <Label color={activity.error == null ? "green" : "red"} className="pf-v5-u-font-weight-bold">
+                        <Label color={activity.error == null ? "green" : "red"}
+                               className="pf-v5-u-font-weight-bold">
                           {activity.error == null ? t("accountActivitiesSuccess") : t("accountActivitiesBlocked")}
                         </Label>
                       </Td>
@@ -250,7 +482,7 @@ export const EventsTable = ({
             </Tbody>
           </Table>
 
-          {showNoSearchResults && (
+          {!loading && showNoSearchResults && (
             <EmptyState variant={EmptyStateVariant.lg} className={styles.emptyState}>
               <EmptyStateHeader titleText={t("accountActivitiesNoSearchResultsTitle")}/>
               <EmptyStateBody>{t("accountActivitiesNoSearchResults")}</EmptyStateBody>
@@ -262,13 +494,20 @@ export const EventsTable = ({
           <Pagination
             itemCount={itemCount}
             page={page}
-            perPage={pageSize}
+            perPage={max}
             widgetId="account-activities-pagination"
-            itemsStart={(page - 1) * pageSize + 1}
-            itemsEnd={(page - 1) * pageSize + filteredActivities.length}
-            onNextClick={(_event, nextPage) => onPage(nextPage)}
-            onPreviousClick={(_event, previousPage) => onPage(previousPage)}
-            onSetPage={(_event, nextPage) => onPage(nextPage)}
+            toggleTemplate={({
+                               firstIndex,
+                               lastIndex,
+                             }: PaginationToggleTemplateProps) => (
+              <b>
+                {firstIndex} - {lastIndex}
+              </b>
+            )}
+            onNextClick={(_, nextPage) => onPage(nextPage)}
+            onPreviousClick={(_, previousPage) => onPage(previousPage)}
+            onSetPage={(_, nextPage) => onPage(nextPage)}
+            onPerPageSelect={(_, perPage) => onPerPage(perPage)}
           />
         </div>
       </div>
