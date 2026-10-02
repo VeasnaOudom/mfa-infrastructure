@@ -3,9 +3,13 @@ package com.khalibre.keycloak.provider.privacyIdea.service;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.URI;
+import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import org.apache.http.HttpStatus;
 import org.jboss.logging.Logger;
@@ -24,6 +28,44 @@ public class PrivacyIdeaService {
     this.baseUrl = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
     this.adminUsername = adminUsername;
     this.adminPassword = adminPassword;
+  }
+
+  /**
+   * Serials of the user's active tokens of one type, used to decide which MFA channels are
+   * actually available before showing the method chooser.
+   *
+   * @return active serials, empty when the user has none of that type
+   */
+  public List<String> getActiveTokenSerials(String username, String type, String adminToken)
+      throws Exception {
+    String endpoint = String.format("%s/token/?user=%s&type=%s", baseUrl,
+        URLEncoder.encode(username, StandardCharsets.UTF_8),
+        URLEncoder.encode(type, StandardCharsets.UTF_8));
+
+    HttpRequest request = HttpRequest.newBuilder()
+        .uri(URI.create(endpoint))
+        .header("Authorization", adminToken)
+        .GET()
+        .build();
+
+    HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+    if (response.statusCode() != HttpStatus.SC_OK) {
+      log.warnf("method=getActiveTokenSerials user=%s type=%s httpStatus=%d", username, type,
+          response.statusCode());
+      return List.of();
+    }
+
+    List<String> serials = new ArrayList<>();
+    for (JsonNode token : objectMapper.readTree(response.body())
+        .path("result").path("value").path("tokens")) {
+      if (token.path("active").asBoolean(false) && !token.path("revoked").asBoolean(false)) {
+        String serial = token.path("serial").asText(null);
+        if (serial != null && !serial.isBlank()) {
+          serials.add(serial);
+        }
+      }
+    }
+    return serials;
   }
 
   public String getSpassTokenSerial(String username, String adminToken) throws Exception {

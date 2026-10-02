@@ -24,9 +24,18 @@ public class TelegramBotClient {
   }
 
   public void sendMessage(String chatId, String text, String replyMarkup) {
+    sendMessage(chatId, text, replyMarkup, null);
+  }
+
+  /**
+   * @param parseMode Telegram entity parser for {@code text}, e.g. "HTML" or "MarkdownV2", or
+   *                  {@code null} to send plain text
+   */
+  public void sendMessage(String chatId, String text, String replyMarkup, String parseMode) {
     String url = "https://api.telegram.org/bot" + botToken + "/sendMessage";
     String json = "{\"chat_id\":\"" + chatId + "\","
       + "\"text\":\"" + escapeJson(text) + "\""
+      + (parseMode != null ? ",\"parse_mode\":\"" + parseMode + "\"" : "")
       + (replyMarkup != null ? ",\"reply_markup\":" + replyMarkup : "")
       + "}";
 
@@ -38,7 +47,15 @@ public class TelegramBotClient {
       .build();
 
     try {
-      httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+      HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+      // Telegram rejects the whole message on a bad parse_mode or unknown chat, so surface it
+      // instead of silently dropping the code.
+      if (response.statusCode() / 100 != 2) {
+        throw new RuntimeException("Telegram sendMessage returned HTTP "
+            + response.statusCode() + ": " + response.body());
+      }
+    } catch (RuntimeException e) {
+      throw e;
     } catch (Exception e) {
       throw new RuntimeException("Failed to send message to Telegram", e);
     }

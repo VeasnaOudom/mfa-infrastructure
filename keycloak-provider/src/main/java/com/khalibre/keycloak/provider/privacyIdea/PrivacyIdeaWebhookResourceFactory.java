@@ -13,27 +13,22 @@ public class PrivacyIdeaWebhookResourceFactory implements RealmResourceProviderF
 
   public static final String PROVIDER_ID = "privacyidea";
 
-  private String baseUrl;
-  private String adminUsername;
-  private String adminPassword;
-  private int spassExpiryMinutes;
-
+  /**
+   * Settings come from {@link PrivacyIdeaSettings}, the same source the MFA channel detector uses,
+   * so the webhook and the OTP page cannot disagree about the server or the shared secret. They are
+   * resolved per request, so admin-console changes apply without a restart.
+   */
   @Override
   public RealmResourceProvider create(KeycloakSession session) {
-    return new PrivacyIdeaWebhookResource(session, baseUrl, adminUsername, adminPassword,
-        spassExpiryMinutes);
+    PrivacyIdeaSettings.Settings settings = PrivacyIdeaSettings.resolve(session);
+    return new PrivacyIdeaWebhookResource(session, settings.baseUrlTrimmed(),
+        settings.adminUsername(), settings.adminPassword(),
+        Math.max(1, settings.spassExpiryMinutes()), settings.webhookSecret());
   }
 
   @Override
   public void init(Config.Scope config) {
-    // Read configuration settings with environment variable fallbacks
-    this.baseUrl = config.get("baseUrl",
-        System.getenv().getOrDefault("PRIVACYIDEA_URL", "http://mfa-privacyidea:8080"));
-    this.adminUsername = config.get("adminUsername",
-        System.getenv().getOrDefault("PI_ADMIN_USER", "admin"));
-    this.adminPassword = config.get("adminPassword",
-        System.getenv().getOrDefault("PI_ADMIN_PASSWORD", "secret"));
-    this.spassExpiryMinutes = config.getInt("spassExpiryMinutes", 5);
+    // Nothing cached here on purpose: values are read per request by create().
   }
 
   @Override
@@ -78,6 +73,12 @@ public class PrivacyIdeaWebhookResourceFactory implements RealmResourceProviderF
         .type(ProviderConfigProperty.STRING_TYPE)
         .defaultValue("5")
         .helpText("Expiry time in minutes for generated OTP PIN")
+        .add()
+        .property()
+        .name("webhookSecret")
+        .label("Webhook Shared Secret")
+        .type(ProviderConfigProperty.PASSWORD)
+        .helpText("Required as ?secret= on every webhook and resend call. Leave empty to disable the check.")
         .add()
         .build();
   }
