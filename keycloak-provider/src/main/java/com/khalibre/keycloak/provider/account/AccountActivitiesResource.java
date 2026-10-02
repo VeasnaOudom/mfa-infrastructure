@@ -10,12 +10,15 @@ import jakarta.ws.rs.core.HttpHeaders;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.core.UriInfo;
+import java.text.ParseException;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TimeZone;
 import org.keycloak.events.Event;
 import org.keycloak.events.EventQuery;
 import org.keycloak.events.EventStoreProvider;
@@ -53,6 +56,9 @@ public class AccountActivitiesResource implements RealmResourceProvider {
   private static final int DEFAULT_MAX_RESULTS = 25;
   private static final int MAX_ALLOWED_RESULTS = 100;
 
+  /** Format accepted for the {@code dateFrom} filter, matching Keycloak's admin events API. */
+  private static final String DATE_FORMAT = "yyyy-MM-dd";
+
   private final KeycloakSession session;
 
   @Context
@@ -71,7 +77,10 @@ public class AccountActivitiesResource implements RealmResourceProvider {
   public Response getEvents(
       @QueryParam("first") Integer first,
       @QueryParam("max") Integer max,
-      @QueryParam("days") String days,
+      @QueryParam("type") List<String> types,
+      @QueryParam("dateFrom") String dateFrom,
+      @QueryParam("dateTo") String dateTo,
+      @QueryParam("ipAddress") String ipAddress,
       @Context HttpHeaders headers) {
     RealmModel realm = session.getContext().getRealm();
     ClientModel accountClient = realm.getClientByClientId(Constants.ACCOUNT_MANAGEMENT_CLIENT_ID);
@@ -86,7 +95,9 @@ public class AccountActivitiesResource implements RealmResourceProvider {
 
     int firstResult = first == null ? 0 : Math.max(first, 0);
     int maxResults = max == null ? DEFAULT_MAX_RESULTS : Math.min(Math.max(max, 1), MAX_ALLOWED_RESULTS);
-    Date fromDate = toFromDate(days);
+    Date fromDate = parseDate(dateFrom);
+    Date toDate = parseDate(dateTo);
+    EventType[] eventTypes = toEventTypes(types);
 
     EventStoreProvider store = session.getProvider(EventStoreProvider.class);
     List<AccountActivity> activities = new ArrayList<>();
@@ -102,6 +113,15 @@ public class AccountActivitiesResource implements RealmResourceProvider {
       if (fromDate != null) {
         query = query.fromDate(fromDate);
       }
+      if (toDate != null) {
+        query = query.toDate(toDate);
+      }
+      if (eventTypes.length > 0) {
+        query = query.type(eventTypes);
+      }
+      if (ipAddress != null && !ipAddress.isBlank()) {
+        query = query.ipAddress(ipAddress.trim());
+      }
 
       try (var events = query.getResultStream()) {
         events.map(this::toAccountActivity).forEach(activities::add);
@@ -115,21 +135,42 @@ public class AccountActivitiesResource implements RealmResourceProvider {
     return Response.ok(result).build();
   }
 
-  private Date toFromDate(String days) {
-    if (days == null || days.isBlank() || "all".equalsIgnoreCase(days)) {
+  /**
+   * Parses a {@code yyyy-MM-dd} date filter into the start (UTC midnight) of that day.
+   *
+   * @return the parsed date, or {@code null} if {@code value} is blank or malformed.
+   */
+  private Date parseDate(String value) {
+    if (value == null || value.isBlank()) {
       return null;
     }
-
+    SimpleDateFormat format = new SimpleDateFormat(DATE_FORMAT);
+    format.setTimeZone(TimeZone.getTimeZone("UTC"));
+    format.setLenient(false);
     try {
-      int parsedDays = Integer.parseInt(days);
-      if (parsedDays <= 0) {
-        return null;
-      }
-      long fromTime = System.currentTimeMillis() - parsedDays * 24L * 60L * 60L * 1000L;
-      return new Date(fromTime);
-    } catch (NumberFormatException ignored) {
+      return format.parse(value.trim());
+    } catch (ParseException ignored) {
       return null;
     }
+  }
+
+  /** Converts the requested event type names into {@link EventType}s, skipping unknown names. */
+  private EventType[] toEventTypes(List<String> types) {
+    if (types == null || types.isEmpty()) {
+      return new EventType[0];
+    }
+    List<EventType> parsed = new ArrayList<>();
+    for (String type : types) {
+      if (type == null || type.isBlank()) {
+        continue;
+      }
+      try {
+        parsed.add(EventType.valueOf(type.trim()));
+      } catch (IllegalArgumentException ignored) {
+        // Ignore unknown event types so a bad filter value cannot break the request.
+      }
+    }
+    return parsed.toArray(new EventType[0]);
   }
 
   /**
