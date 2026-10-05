@@ -30,6 +30,7 @@ public final class PrivacyIdeaSettings {
   public static final String KEY_ADMIN_USERNAME = "piAdminUsername";
   public static final String KEY_ADMIN_PASSWORD = "piAdminPassword";
   public static final String KEY_WEBHOOK_SECRET = "webhookSecret";
+  public static final String KEY_PUBLIC_BASE_URL = "publicBaseUrl";
   public static final String KEY_EXPIRY_MINUTES = "spassExpiryMinutes";
   public static final String KEY_CHALLENGE_TTL_MINUTES = "challengeTtlMinutes";
 
@@ -46,6 +47,7 @@ public final class PrivacyIdeaSettings {
         pick(admin, KEY_ADMIN_USERNAME, "PI_ADMIN_USER", "admin"),
         pick(admin, KEY_ADMIN_PASSWORD, "PI_ADMIN_PASSWORD", "secret"),
         pick(admin, KEY_WEBHOOK_SECRET, "PRIVACYIDEA_WEBHOOK_SECRET", ""),
+        pick(admin, KEY_PUBLIC_BASE_URL, "KEYCLOAK_PUBLIC_BASE_URL", ""),
         parseInt(pick(admin, KEY_EXPIRY_MINUTES, null, "5"), 5),
         parseInt(pick(admin, KEY_CHALLENGE_TTL_MINUTES, "PRIVACYIDEA_CHALLENGE_TTL_MINUTES", "30"),
             30));
@@ -123,7 +125,8 @@ public final class PrivacyIdeaSettings {
 
   /** Immutable snapshot of the resolved settings. */
   public record Settings(String baseUrl, String adminUsername, String adminPassword,
-      String webhookSecret, int spassExpiryMinutes, int challengeTtlMinutes) {
+      String webhookSecret, String publicBaseUrl, int spassExpiryMinutes,
+      int challengeTtlMinutes) {
 
     public String baseUrlTrimmed() {
       return baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
@@ -131,6 +134,24 @@ public final class PrivacyIdeaSettings {
 
     public boolean hasSecret() {
       return webhookSecret != null && !webhookSecret.isBlank();
+    }
+
+    /**
+     * Public origin for links and images in mail this provider sends. Falls back to KC_HOSTNAME,
+     * which Traefik's public hostname already is, so a deployment only has to set this when it
+     * needs something other than {@code https://<hostname>}.
+     */
+    public String publicBaseUrl() {
+      String configured = publicBaseUrl == null ? "" : publicBaseUrl.trim();
+      if (!configured.isEmpty()) {
+        return configured.endsWith("/") ? configured.substring(0, configured.length() - 1)
+            : configured;
+      }
+      String hostname = System.getenv("KC_HOSTNAME");
+      if (hostname == null || hostname.isBlank()) {
+        return "";
+      }
+      return hostname.startsWith("http") ? hostname : "https://" + hostname;
     }
 
     /**
