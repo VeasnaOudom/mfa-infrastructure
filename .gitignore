@@ -19,3 +19,5 @@ Dockerfile
 config/privacyidea/keys/encfile
 config/mariadb/conf.d/*.cnf
 !config/mariadb/conf.d/.gitkeep
+khalibre-account-ui/node_modules
+themes/khalibre/email/theme.properties
