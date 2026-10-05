@@ -41,19 +41,13 @@ tasks.named<Jar>("jar") {
 
 val providersDir = rootProject.layout.projectDirectory.dir("../keycloak-providers").asFile
 
-// keycloak-providers is bind-mounted at /opt/keycloak/providers, so every jar the container needs
-// must land there. Third-party jars are committed under libs/ rather than left as manual copies.
 val copyJarToProviders by tasks.registering(Copy::class) {
     group = "build"
-    description = "Copies the built provider jar and the vendored libs/*.jar into ./keycloak-providers."
+    description = "Copies the built provider jar into ./keycloak-providers for the Keycloak container."
 
-    from(tasks.named("jar")) {
-        rename { "${project.name}-${project.version}.jar" }
-    }
-    from(layout.projectDirectory.dir("libs")) {
-        include("*.jar")
-    }
+    from(tasks.named("jar"))
     into(providersDir)
+    rename { "${project.name}-${project.version}.jar" }
 }
 
 tasks.named("assemble") {
