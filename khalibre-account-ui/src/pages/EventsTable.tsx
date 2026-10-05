@@ -18,7 +18,6 @@ import {
   Spinner,
   TextInput,
 } from "@patternfly/react-core";
-import { KeycloakSelect } from "@keycloak/keycloak-ui-shared";
 import { useEffect, useRef, useState } from "react";
 import { Table, Tbody, Td, Th, Thead, Tr } from "@patternfly/react-table";
 import { useTranslation } from "react-i18next";
@@ -31,6 +30,7 @@ import {
 import { formatDateTime } from "../utils/formatDate";
 import { isErrorActivity } from "../utils/events";
 import styles from "./EventsTable.module.css";
+import { TypeaheadSelect } from "../components/TypeHeadSelect.tsx";
 
 type EventsTableProps = {
   activities: AccountActivity[];
@@ -78,23 +78,6 @@ export const EventsTable = ({
                               onPerPage,
                             }: EventsTableProps) => {
   const {t} = useTranslation();
-
-  const toEventTypeValue = (value: string | number | object) => {
-    if (typeof value === "string" || typeof value === "number") {
-      return String(value);
-    }
-
-    if (
-      typeof value === "object" &&
-      value !== null &&
-      "value" in value &&
-      typeof (value as { value?: unknown }).value !== "undefined"
-    ) {
-      return String((value as { value: unknown }).value);
-    }
-
-    return String(value);
-  };
 
   const [draftFilter, setDraftFilter] = useState<EventsFilter>(activeFilter);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -209,7 +192,7 @@ export const EventsTable = ({
               <MenuToggle
                 onClick={() => setSearchOpen(!searchOpen)}
                 isExpanded={searchOpen}
-                className={styles.menuToggle}
+                className={`edc-button-input ${styles.menuToggle}`}
               >
                 {t("accountActivitiesSearchEvents")}
               </MenuToggle>
@@ -226,23 +209,16 @@ export const EventsTable = ({
                       label={t("accountActivitiesEventType")}
                       fieldId="kc-eventType"
                     >
-                      <KeycloakSelect
-                        variant={"typeaheadMulti" as never}
+                      <TypeaheadSelect
+                        className={styles.eventTypeSelect}
+                        data-testid="event-type-searchField"
                         maxHeight={300}
                         typeAheadAriaLabel={t("accountActivitiesEventType")}
-                        chipGroupProps={{
-                          numChips: 1,
-                          expandedText: t("accountActivitiesHide"),
-                          collapsedText: t("accountActivitiesShowRemaining"),
-                        }}
                         onToggle={setTypeSelectOpen}
                         isOpen={typeSelectOpen}
                         selections={draftFilter.type}
-                        onSelect={(value) => {
-                          const option = toEventTypeValue(value);
-                          if (!option) {
-                            return;
-                          }
+                        onSelect={(selectedValue: string | number | object) => {
+                          const option = String(selectedValue);
                           setDraftFilter((prev) => ({
                             ...prev,
                             type: prev.type.includes(option)
@@ -250,9 +226,9 @@ export const EventsTable = ({
                               : [...prev.type, option],
                           }));
                         }}
-                        onClear={() =>
+                        onClear={() => {
                           setDraftFilter((prev) => ({...prev, type: []}))
-                        }
+                        }}
                         chipGroupComponent={
                           <ChipGroup>
                             {draftFilter.type.map((chip) => (
@@ -276,12 +252,11 @@ export const EventsTable = ({
                           <SelectOption
                             key={option}
                             value={option}
-                            selected={draftFilter.type.includes(option)}
                           >
                             {eventTypeLabel(option)}
                           </SelectOption>
                         ))}
-                      </KeycloakSelect>
+                      </TypeaheadSelect>
                     </FormGroup>
 
                     <FormGroup
@@ -499,9 +474,9 @@ export const EventsTable = ({
             widgetId="account-activities-pagination"
             isCompact
             toggleTemplate={({
-               firstIndex,
-               lastIndex,
-             }: PaginationToggleTemplateProps) => (
+                               firstIndex,
+                               lastIndex,
+                             }: PaginationToggleTemplateProps) => (
               <b>
                 {firstIndex} - {lastIndex}
               </b>
