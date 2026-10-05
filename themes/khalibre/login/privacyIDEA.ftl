@@ -133,6 +133,7 @@
                                      data-authenticator="${msg('edc.otp.authenticator')}"
                                      data-authenticator-detail="${msg('edc.otp.authenticatorDetail')}"
                                      data-email="${msg('edc.otp.email')}"
+                                     data-backup-code="${msg('edc.otp.backupCode')}"
                                      data-sent="${msg('edc.otp.sent')}"
                                      data-available="${msg('edc.otp.available')}"></div>
                         </#if>
@@ -163,6 +164,16 @@
                                     <input class="edc-otp-box" type="text" inputmode="numeric" pattern="[0-9]*"
                                            maxlength="1" autocomplete="off" aria-label="${msg('edc.otp.digit', 6)}"/>
                                 </div>
+                                <#-- Only shown when the user actually enrolled a TAN token. Same OTP
+                                     field, so nothing extra to submit - privacyIDEA validates a backup
+                                     code through the ordinary check call. -->
+                                <p class="edc-otp-hint" id="edcBackupCodeHint" hidden>
+                                    <#-- Bold phrase supplied by pi-form.js so the emphasis stays with
+                                         the copy that can change, not baked into the markup here. -->
+                                    <span data-prefix="${msg('edc.otp.backupCodeHintPrefix')}">${msg('edc.otp.backupCodeHintPrefix')}</span>
+                                    <b>${msg('edc.otp.backupCode')}</b>
+                                    <span data-suffix="${msg('edc.otp.backupCodeHintSuffix')}">${msg('edc.otp.backupCodeHintSuffix')}</span>
+                                </p>
                                 <div class="edc-otp-foot">
                                     <span class="edc-otp-expiry" id="edcOtpExpiry">
                                         <span id="edcOtpExpiryLabel">${msg('edc.otp.expiresInLabel')}</span>

@@ -267,6 +267,7 @@ public class PrivacyIdeaWebhookResource implements RealmResourceProvider {
     channels.put("email", "1".equals(detected.get(EdcMfaChannelsAuthenticator.NOTE_EMAIL)));
     channels.put("totp", "1".equals(detected.get(EdcMfaChannelsAuthenticator.NOTE_TOTP)));
     channels.put("telegram", "1".equals(detected.get(EdcMfaChannelsAuthenticator.NOTE_TELEGRAM)));
+    channels.put("backupCode", "1".equals(detected.get(EdcMfaChannelsAuthenticator.NOTE_BACKUP_CODE)));
     channels.put("masked", "1".equals(detected.get(EdcMfaChannelsAuthenticator.NOTE_MASKED)));
     channels.put("telegramHandle", detected.get(EdcMfaChannelsAuthenticator.NOTE_TELEGRAM_HANDLE));
     channels.put("emailMasked", detected.get(EdcMfaChannelsAuthenticator.NOTE_EMAIL_MASKED));

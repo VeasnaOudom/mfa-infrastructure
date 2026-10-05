@@ -42,6 +42,7 @@ public final class EdcChannelDetector {
     channels.put(EdcMfaChannelsAuthenticator.NOTE_EMAIL, "0");
     channels.put(EdcMfaChannelsAuthenticator.NOTE_TOTP, "0");
     channels.put(EdcMfaChannelsAuthenticator.NOTE_TELEGRAM, "0");
+    channels.put(EdcMfaChannelsAuthenticator.NOTE_BACKUP_CODE, "0");
     channels.put(EdcMfaChannelsAuthenticator.NOTE_MASKED, "0");
 
     if (user == null) {
@@ -155,6 +156,14 @@ public final class EdcChannelDetector {
           channels.put(EdcMfaChannelsAuthenticator.NOTE_TOTP, "1");
           break;
         }
+      }
+
+      // A TAN token is a pre-printed list of single-use 6-digit codes, which is exactly a set of
+      // backup codes. They are typed into the same OTP field, and privacyIDEA validates them through
+      // the ordinary /validate/check call the authenticator already makes, so no extra validation
+      // path is needed here - only the signal that the channel exists.
+      if (!privacyIdea.getActiveTokenSerials(username, "tan", adminToken).isEmpty()) {
+        channels.put(EdcMfaChannelsAuthenticator.NOTE_BACKUP_CODE, "1");
       }
     } catch (Exception e) {
       log.errorf("method=detectPrivacyIdeaTokens user=%s error=%s", username, e.getMessage());

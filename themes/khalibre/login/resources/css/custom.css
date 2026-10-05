@@ -796,6 +796,20 @@ body.login-pf,
     display: none !important;
 }
 
+.edc-otp-hint {
+    margin: 0 0 16px;
+    font-size: 13.5px;
+    line-height: 1.5;
+    color: #5b6478;
+    text-align: center;
+    text-wrap: balance;
+}
+
+.edc-otp-hint b {
+    color: #2b3072;
+    font-weight: 600;
+}
+
 .edc-otp-foot {
     display: flex;
     align-items: center;
