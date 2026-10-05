@@ -178,8 +178,7 @@ public class TelegramIdentityProvider extends
 
         AuthState auth = AuthStateSession.get(session, sessionId);
         if (auth == null || !"COMPLETED".equals(auth.getStatus())) {
-          sendToTelegram(auth, "telegram.session-expired");
-          return callback.error("telegram_auth_failed");
+          return rejected(auth, "telegram.session-expired");
         }
 
         boolean isLinkMode = authSession.getAuthNote("LINKING_IDENTITY_PROVIDER") != null;
@@ -190,11 +189,20 @@ public class TelegramIdentityProvider extends
           if (authenticatedUser == null
             || (isPhoneMatchRequired(authenticatedUser)
             && !isPhoneMatched(authenticatedUser, auth.getPhoneNumber()))) {
-            return linkRejected(sessionId, auth);
+            return rejected(auth, "telegram.link-phone-mismatch");
           }
           autoLinkUsername = authenticatedUser.getUsername();
         } else {
           autoLinkUsername = findAutoLinkUsername(auth.getPhoneNumber());
+        }
+
+        AuthStateSession.remove(session, sessionId);
+
+        boolean accountLinked = isAccountLinked(provider.getConfig().getAlias(), auth);
+        if (accountLinked || autoLinkUsername != null) {
+          sendToTelegram(auth, isLinkMode ? "telegram.link-success" : "telegram.login-success");
+        } else {
+          return rejected(auth, isLinkMode ? "telegram.link-failed" : "telegram.login-failed");
         }
 
         BrokeredIdentityContext context = buildContext(
@@ -203,27 +211,9 @@ public class TelegramIdentityProvider extends
           auth.getUsername(),
           auth.getFirstName(),
           auth.getLastName(),
-          auth.getPhoneNumber());
-
-        AuthStateSession.remove(session, sessionId);
-        context.setIdp(provider);
-        context.setAuthenticationSession(authSession);
-        Response response = callback.authenticated(context);
-
-        String chatId = auth.getTelegramUserId();
-        String botToken = provider.getBotToken();
-        if (chatId != null && botToken != null) {
-          boolean accountLinked = isAccountLinked(provider.getConfig().getAlias(), auth);
-          if (accountLinked || autoLinkUsername != null) {
-            String message = isLinkMode ? "telegram.link-success" : "telegram.login-success";
-            sendToTelegram(auth, message);
-          } else {
-            String message = isLinkMode ? "telegram.link-failed" : "telegram.login-failed";
-            sendToTelegram(auth, message);
-          }
-        }
-
-        return response;
+          auth.getPhoneNumber(),
+          authSession);
+        return callback.authenticated(context);
       } catch (WebApplicationException wae) {
         throw wae;
       } catch (Exception e) {
@@ -232,13 +222,15 @@ public class TelegramIdentityProvider extends
     }
 
     private void sendToTelegram(AuthState auth, String messageKey) {
-      if (auth != null && auth.getTelegramUserId() != null) {
-        String botToken = provider.getBotToken();
-        if (botToken != null) {
-          LoginFormsProvider formProvider = session.getProvider(LoginFormsProvider.class);
-          String message = formProvider.getMessage(messageKey);
-          new TelegramBotClient(botToken).sendMessage(auth.getTelegramUserId(), message, null);
-        }
+      if (auth == null) {
+        return;
+      }
+      String tgUserId = auth.getTelegramUserId();
+      String botToken = provider.getBotToken();
+      if (tgUserId != null && botToken != null) {
+        LoginFormsProvider formProvider = session.getProvider(LoginFormsProvider.class);
+        String message = formProvider.getMessage(messageKey);
+        new TelegramBotClient(botToken).sendMessage(tgUserId, message, null);
       }
     }
 
@@ -310,10 +302,10 @@ public class TelegramIdentityProvider extends
     }
 
     @Nonnull
-    private BrokeredIdentityContext buildContext(String telegramUserId, String autoLinkUsername,
-      String username, String firstName, String lastName, String phoneNumber) {
-      BrokeredIdentityContext context = new BrokeredIdentityContext(telegramUserId,
-        provider.getConfig());
+    private BrokeredIdentityContext buildContext(String tgUserId, String autoLinkUsername,
+      String username, String firstName, String lastName, String phoneNumber,
+      AuthenticationSessionModel authSession) {
+      BrokeredIdentityContext context = new BrokeredIdentityContext(tgUserId, provider.getConfig());
       if (autoLinkUsername != null) {
         context.setModelUsername(autoLinkUsername);
       } else {
@@ -322,11 +314,15 @@ public class TelegramIdentityProvider extends
       context.setUsername(username);
       context.setFirstName(sanitizeEmojiAndRareScript(firstName));
       context.setLastName(sanitizeEmojiAndRareScript(lastName));
-      context.setUserAttribute(ATTR_TG_USER_ID, telegramUserId);
+
+      context.setUserAttribute(ATTR_TG_USER_ID, tgUserId);
       context.setUserAttribute(ATTR_TG_USERNAME, username);
       context.setUserAttribute(ATTR_TG_USER_PHONE_NUMBER, phoneNumber);
       context.setUserAttribute(ATTR_TG_FIRST_NAME, firstName);
       context.setUserAttribute(ATTR_TG_LAST_NAME, lastName);
+
+      context.setIdp(provider);
+      context.setAuthenticationSession(authSession);
       return context;
     }
 
@@ -353,9 +349,7 @@ public class TelegramIdentityProvider extends
       return matchedUser != null && matchedUser.getId().equals(authenticatedUser.getId());
     }
 
-    private Response linkRejected(String sessionId, AuthState auth) {
-      AuthStateSession.remove(session, sessionId);
-      String message = "telegram.link-phone-mismatch";
+    private Response rejected(AuthState auth, String message) {
       sendToTelegram(auth, message);
       event.event(EventType.IDENTITY_PROVIDER_LOGIN);
       event.error(Errors.IDENTITY_PROVIDER_LOGIN_FAILURE);
