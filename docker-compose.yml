@@ -115,9 +115,8 @@ services:
       PI_ADMIN_PASSWORD: ${PI_ADMIN_PASSWORD}
       # Shared secret required by the privacyIDEA webhook and resend endpoints
       PRIVACYIDEA_WEBHOOK_SECRET: ${PRIVACYIDEA_WEBHOOK_SECRET}
-      # Public origin email clients use to load theme assets (logo, images). Must differ per
-      # environment; defaults to https://${KEYCLOAK_HOST} when unset.
-      KEYCLOAK_PUBLIC_BASE_URL: ${KEYCLOAK_PUBLIC_BASE_URL:-}
+      # The public origin email clients use to load theme assets is the publicBaseUrl field on the
+      # EDC MFA Channels authenticator config, falling back to KC_HOSTNAME above when unset.
       # Telegram bot update mode: "polling" (DEV, long-polling) or "webhook" (PRD)
       TELEGRAM_BOT_MODE: ${TELEGRAM_BOT_MODE}
       KC_TRUSTSTORE_PATHS: /opt/keycloak/certs/truststore/root-ca.crt

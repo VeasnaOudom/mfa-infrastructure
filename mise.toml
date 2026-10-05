@@ -115,6 +115,7 @@ set -euo pipefail
 docker compose down -v
 rm -f certs/wildcard.crt certs/wildcard.key certs/truststore/*.crt
 rm -f config/mariadb/conf.d/*.cnf
+rm -f themes/khalibre/email/theme.properties
 rm -f Dockerfile
 rm -rf keycloak-providers
 rm -rf databases/*.tar.gz

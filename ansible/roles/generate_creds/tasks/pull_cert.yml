@@ -82,3 +82,17 @@
     mode: '0644'
   when: pi_encfile_b64 is defined and (pi_encfile_b64 | trim | length > 0)
   tags: env,get_cert
+
+- name: Ensure khalibre email theme directory exists
+  ansible.builtin.file:
+    path: "{{ project_dir }}/themes/khalibre/email"
+    state: directory
+    mode: '0755'
+  tags: env,get_cert
+
+- name: Render khalibre email theme properties from template
+  ansible.builtin.template:
+    src: email-theme.properties.j2
+    dest: "{{ project_dir }}/themes/khalibre/email/theme.properties"
+    mode: '0644'
+  tags: env,get_cert
