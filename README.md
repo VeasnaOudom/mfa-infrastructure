@@ -39,6 +39,16 @@ Internal SMTP endpoint for containers on the stack network: `smtp4dev:25`.
 
 Generated MariaDB config is written to `config/mariadb/conf.d/`. The generated root `Dockerfile` and MariaDB config are ignored by git.
 
+## Configuration
+
+`mise run start` brings the stack up, but the PrivacyIDEA OTP flow needs one-off configuration on both
+Keycloak and privacyIDEA before it will authenticate anyone: an authentication flow with two custom
+authenticators, a privacyIDEA resolver and a webhook event handler, and a shared secret that has to
+match in three places.
+
+**[docs/otp-flow-setup.md](docs/otp-flow-setup.md)** — step-by-step setup for both systems, plus how to
+verify it without needing a real user's credentials.
+
 ## Tasks
 
 Run tasks with `mise run <task>`.
