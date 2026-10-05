@@ -13,4 +13,80 @@
   :global(.pf-v5-c-masthead__content > .pf-v5-c-toolbar) {
     background-color: var(--edc-navy) !important;
   }
+
+  :global(.pf-v5-c-button.pf-m-primary)[aria-disabled="false"] {
+    color: var(--edc-card);
+    font-weight: 500;
+    background-color: var(--edc-navy);
+
+    &:hover {
+      background-color: var(--edc-navy-hover);
+    }
+  }
+
+  :global(.pf-v5-c-button.pf-m-secondary)[aria-disabled="false"] {
+    color: var(--edc-navy);
+    font-weight: 500;
+    background-color: var(--edc-card);
+
+    &::after {
+      border-color: var(--edc-navy);
+    }
+  }
+
+  :global(.edc-button-input) {
+    background-color: var(--edc-card);
+    border: 1px solid var(--border-input);
+    border-bottom: 2px solid var(--border-input);
+    border-radius: var(--border-radius-md);
+    padding: 8px 14px;
+
+    &:focus {
+      border-color: var(--edc-navy);
+      box-shadow: 0 0 0 3px rgba(43, 48, 114, 0.12);
+      outline: none;
+    }
+
+  }
+
+  :global(.pf-v5-c-form-control) {
+    background-color: unset;
+    border-radius: 4px;
+
+    &::before {
+      border: none;
+    }
+
+    &::after {
+      border: none;
+    }
+  }
+
+  input[type="text"],
+  input[type="password"] {
+    width: 100%;
+    box-sizing: border-box;
+    border: 1px solid var(--border-input);
+    border-bottom: 2px solid var(--border-input);
+    background-color: var(--edc-card);
+    border-radius: 4px;
+    font-size: 15px;
+    padding: 8px 14px;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+
+  input[type="text"]:focus,
+  input[type="password"]:focus {
+    border-color: var(--edc-navy);
+    box-shadow: 0 0 0 3px rgba(43, 48, 114, 0.12);
+    outline: none;
+  }
+
+
+  label {
+    color: var(--text-black);
+    font-size: 13px;
+    font-weight: 500;
+    letter-spacing: 0.2px;
+  }
 }
