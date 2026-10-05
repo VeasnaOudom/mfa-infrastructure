@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.khalibre.keycloak.provider.edc.EdcChallengeToken;
 import com.khalibre.keycloak.provider.edc.EdcChannelDetector;
 import com.khalibre.keycloak.provider.edc.EdcMfaChannelsAuthenticator;
+import com.khalibre.keycloak.provider.privacyIdea.PrivacyIdeaSettings.Settings;
 import com.khalibre.keycloak.provider.privacyIdea.service.PrivacyIdeaService;
 import com.khalibre.keycloak.provider.telegram.TelegramBotClient;
 import jakarta.ws.rs.Consumes;
@@ -102,8 +103,8 @@ public class PrivacyIdeaWebhookResource implements RealmResourceProvider {
 
   /**
    * privacyIDEA's webhook handler cannot send custom headers, so the shared secret travels as a
-   * query parameter. Compared in constant time. When no secret is configured the check is skipped,
-   * which keeps existing deployments working but leaves the endpoint open.
+   * query parameter. Compared in constant time. An unconfigured secret fails closed: the endpoint
+   * rejects every request rather than defaulting to open.
    */
   /**
    * Username proven by the signed cookie the OTP page carries, or {@code null}.
@@ -143,7 +144,9 @@ public class PrivacyIdeaWebhookResource implements RealmResourceProvider {
 
   private boolean secretValid(@QueryParam("secret") String supplied) {
     if (webhookSecret.isEmpty()) {
-      return true;
+      log.error("method=secretValid status=REJECTED "
+          + "message=No webhook secret configured; set PRIVACYIDEA_WEBHOOK_SECRET");
+      return false;
     }
     if (supplied == null || supplied.length() != webhookSecret.length()) {
       return false;
@@ -478,7 +481,7 @@ public class PrivacyIdeaWebhookResource implements RealmResourceProvider {
     attributes.put("appName", realm.getDisplayName() != null && !realm.getDisplayName().isBlank()
         ? realm.getDisplayName()
         : realm.getName());
-    attributes.put("otpEmailBaseUrl", publicBaseUrl());
+    attributes.put("otpEmailBaseUrl", settings.publicBaseUrl());
     emailProvider.send("otpEmailSubject", "privacyidea-otp.ftl", attributes);
   }
 
@@ -487,29 +490,13 @@ public class PrivacyIdeaWebhookResource implements RealmResourceProvider {
    *
    * The {@code url} bean available to email templates is built from the server's own request base
    * URI, so it yields the internal host and port (for example {@code http://keycloak:8080}) rather
-   * than the address recipients can reach. This is therefore per-environment configuration, not
-   * something a locale message file can carry, so it is read from the environment.
+   * than the address recipients can reach. It is therefore per-environment configuration, not
+   * something a locale message file can carry.
    *
-   * <p>Set {@code KEYCLOAK_PUBLIC_BASE_URL} per environment; it defaults to {@code https://} plus
-   * {@code KC_HOSTNAME}, which is already the public hostname for this deployment.
+   * <p>Resolved by {@link Settings#publicBaseUrl()}: the {@code publicBaseUrl} field on the EDC MFA
+   * Channels execution wins, then {@code KEYCLOAK_PUBLIC_BASE_URL}, then {@code https://} plus
+   * {@code KC_HOSTNAME}.
    */
-  private String publicBaseUrl() {
-    String configured = System.getenv("KEYCLOAK_PUBLIC_BASE_URL");
-    if (configured != null && !configured.isBlank()) {
-      return trimTrailingSlash(configured.trim());
-    }
-    String hostname = System.getenv("KC_HOSTNAME");
-    if (hostname != null && !hostname.isBlank()) {
-      return "https://" + trimTrailingSlash(hostname.trim());
-    }
-    log.warn("method=publicBaseUrl message=Neither KEYCLOAK_PUBLIC_BASE_URL nor KC_HOSTNAME is set; "
-        + "email asset URLs will not resolve");
-    return "";
-  }
-
-  private static String trimTrailingSlash(String value) {
-    return value.endsWith("/") ? value.substring(0, value.length() - 1) : value;
-  }
 
   @Override
   public void close() {

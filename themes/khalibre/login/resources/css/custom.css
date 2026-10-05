@@ -158,6 +158,12 @@ body.login-pf,
 .login-pf-page .kc-form-group,
 .login-pf-page #kc-form-buttons {
   margin-bottom: 20px;
+  width: 100%;
+}
+
+#kc-passwd-update-form .form-group {
+  margin-left: 0;
+  margin-right: 0;
 }
 
 .login-pf-page .col-xs-12,
@@ -945,5 +951,5 @@ body.login-pf,
  * silently does nothing.
  */
 [hidden] {
-    display: none !important;
+    display: none !important
 }
