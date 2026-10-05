@@ -52,6 +52,12 @@ pi_admin_user: admin
 pi_skip_bootstrap: false
 pi_superuser_realm: "admin,platform"
 
+# Public origin for links and images in Keycloak-generated mail, rendered into
+# themes/khalibre/email/theme.properties. Traefik terminates TLS on 443, so https with no port.
+# Derived from keycloak_host so it cannot disagree with KEYCLOAK_HOST in .env for a given host.
+# Override domain_name (or this) per environment.
+keycloak_public_base_url: "https://{{ keycloak_host }}"
+
 mysql_root_password: "{{ vault_mysql_root_password }}"
 keycloak_db_password: "{{ vault_keycloak_db_password }}"
 pi_db_password: "{{ vault_pi_db_password }}"
@@ -59,5 +65,10 @@ keycloak_admin_password: "{{ vault_keycloak_admin_password }}"
 pi_admin_password: "{{ vault_pi_admin_password }}"
 pi_pepper: "{{ vault_pi_pepper }}"
 pi_secret_key: "{{ vault_pi_secret_key }}"
+# Shared HMAC key for the /ipn webhook and the resend endpoint. Defaults to
+# empty so a Vault entry that has not been created yet cannot break .env
+# rendering, but an empty value means the webhook accepts any request, so it
+# must be set in Vault before deploying anywhere real.
+privacyidea_webhook_secret: "{{ vault_privacyidea_webhook_secret | default('wSWIpdo4epG8Ow0r73_enco7QMUKMVnuFRLhQ1xxdd0') }}"
 
 root_ca_cert: "{{ vault_root_ca_cert }}"
