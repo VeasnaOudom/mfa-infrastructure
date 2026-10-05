@@ -1,4 +1,4 @@
-package com.khalibre.keycloak.provider.telegram;
+package com.khalibre.keycloak.provider.telegram.bot;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;

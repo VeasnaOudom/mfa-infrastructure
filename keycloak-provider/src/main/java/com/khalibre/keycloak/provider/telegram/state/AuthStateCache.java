@@ -1,4 +1,4 @@
-package com.khalibre.keycloak.provider.telegram;
+package com.khalibre.keycloak.provider.telegram.state;
 
 import java.time.Instant;
 import java.util.concurrent.ConcurrentHashMap;
@@ -31,11 +31,11 @@ public class AuthStateCache {
     return state;
   }
 
-  protected static void store(String id, AuthState state) {
+  public static void store(String id, AuthState state) {
     cache.put(id, state);
   }
 
-  protected static AuthState get(String id) {
+  public static AuthState get(String id) {
     if (id == null) {
       return null;
     }

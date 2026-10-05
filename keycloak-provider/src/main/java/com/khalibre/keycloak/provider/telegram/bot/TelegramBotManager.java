@@ -1,4 +1,4 @@
-package com.khalibre.keycloak.provider.telegram;
+package com.khalibre.keycloak.provider.telegram.bot;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;

@@ -7,7 +7,7 @@ import com.khalibre.keycloak.provider.edc.EdcChannelDetector;
 import com.khalibre.keycloak.provider.edc.EdcMfaChannelsAuthenticator;
 import com.khalibre.keycloak.provider.privacyIdea.PrivacyIdeaSettings.Settings;
 import com.khalibre.keycloak.provider.privacyIdea.service.PrivacyIdeaService;
-import com.khalibre.keycloak.provider.telegram.TelegramBotClient;
+import com.khalibre.keycloak.provider.telegram.bot.TelegramBotClient;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.GET;
 import jakarta.ws.rs.POST;

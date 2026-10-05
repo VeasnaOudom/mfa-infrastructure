@@ -1,7 +1,10 @@
-package com.khalibre.keycloak.provider.telegram;
+package com.khalibre.keycloak.provider.telegram.idp;
 
-import static com.khalibre.keycloak.provider.telegram.TelegramIdentityProviderFactory.AUTO_LINK_BY_PHONE_NUMBER_KEY;
+import static com.khalibre.keycloak.provider.telegram.idp.TelegramIdentityProviderFactory.AUTO_LINK_BY_PHONE_NUMBER_KEY;
 
+import com.khalibre.keycloak.provider.telegram.bot.TelegramBotClient;
+import com.khalibre.keycloak.provider.telegram.state.AuthState;
+import com.khalibre.keycloak.provider.telegram.state.AuthStateSession;
 import jakarta.annotation.Nonnull;
 import jakarta.ws.rs.GET;
 import jakarta.ws.rs.Path;

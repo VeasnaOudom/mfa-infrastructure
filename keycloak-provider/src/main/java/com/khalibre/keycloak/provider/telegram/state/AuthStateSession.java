@@ -1,4 +1,4 @@
-package com.khalibre.keycloak.provider.telegram;
+package com.khalibre.keycloak.provider.telegram.state;
 
 import java.util.HashMap;
 import java.util.Map;

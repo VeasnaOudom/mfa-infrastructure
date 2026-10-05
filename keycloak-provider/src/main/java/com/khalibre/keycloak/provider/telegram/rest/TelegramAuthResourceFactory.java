@@ -1,4 +1,4 @@
-package com.khalibre.keycloak.provider.telegram;
+package com.khalibre.keycloak.provider.telegram.rest;
 
 import org.keycloak.Config;
 import org.keycloak.models.KeycloakSession;

@@ -1,6 +1,14 @@
-package com.khalibre.keycloak.provider.telegram;
+package com.khalibre.keycloak.provider.telegram.rest;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.khalibre.keycloak.provider.telegram.state.AuthState;
+import com.khalibre.keycloak.provider.telegram.state.AuthStateCache;
+import com.khalibre.keycloak.provider.telegram.state.AuthStateSession;
+import com.khalibre.keycloak.provider.telegram.bot.TelegramBotClient;
+import com.khalibre.keycloak.provider.telegram.bot.TelegramBotManager;
+import com.khalibre.keycloak.provider.telegram.bot.TelegramBotMode;
+import com.khalibre.keycloak.provider.telegram.bot.TelegramUpdateHandler;
+import com.khalibre.keycloak.provider.telegram.bot.TelegramWebhookPayload;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.GET;
 import jakarta.ws.rs.POST;

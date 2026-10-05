@@ -1,7 +1,9 @@
-package com.khalibre.keycloak.provider.telegram;
+package com.khalibre.keycloak.provider.telegram.bot;
 
-import com.khalibre.keycloak.provider.telegram.TelegramWebhookPayload.Contact;
-import com.khalibre.keycloak.provider.telegram.TelegramWebhookPayload.From;
+import com.khalibre.keycloak.provider.telegram.bot.TelegramWebhookPayload.Contact;
+import com.khalibre.keycloak.provider.telegram.bot.TelegramWebhookPayload.From;
+import com.khalibre.keycloak.provider.telegram.state.AuthState;
+import com.khalibre.keycloak.provider.telegram.state.AuthStateCache;
 
 public class TelegramUpdateHandler {
 

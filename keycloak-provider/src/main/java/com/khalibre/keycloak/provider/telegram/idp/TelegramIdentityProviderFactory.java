@@ -1,5 +1,6 @@
-package com.khalibre.keycloak.provider.telegram;
+package com.khalibre.keycloak.provider.telegram.idp;
 
+import com.khalibre.keycloak.provider.telegram.bot.TelegramBotManager;
 import java.util.List;
 import org.keycloak.Config;
 import org.keycloak.broker.oidc.OAuth2IdentityProviderConfig;

@@ -1,1 +1,1 @@
-com.khalibre.keycloak.provider.telegram.TelegramIdentityProviderFactory
+com.khalibre.keycloak.provider.telegram.idp.TelegramIdentityProviderFactory
