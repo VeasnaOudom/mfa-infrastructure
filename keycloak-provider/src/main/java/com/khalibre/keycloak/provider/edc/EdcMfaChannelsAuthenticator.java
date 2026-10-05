@@ -30,6 +30,7 @@ public class EdcMfaChannelsAuthenticator implements org.keycloak.authentication.
   public static final String NOTE_TOTP = "edc_channel_totp";
   public static final String NOTE_TELEGRAM = "edc_channel_telegram";
   public static final String NOTE_TELEGRAM_HANDLE = "edc_channel_telegram_handle";
+  public static final String NOTE_BACKUP_CODE = "edc_channel_backup_code";
   public static final String NOTE_MASKED = "edc_channel_masked";
 
   /** Cookie the OTP page presents to the channels and resend endpoints. */

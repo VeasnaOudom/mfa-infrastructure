@@ -301,7 +301,8 @@ function edcRealmBase() {
 var EDC_ICONS = {
     telegram: '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M21.9 4.3 18.7 19.4c-.2 1-.8 1.2-1.6.8l-4.5-3.3-2.2 2.1c-.2.2-.4.4-.9.4l.3-4.5 8.2-7.4c.4-.3-.1-.5-.6-.2L6.2 13.5l-4.4-1.4c-1-.3-1-1 .2-1.5l17.2-6.6c.8-.3 1.5.2 1.2 1.5z"/></svg>',
     totp: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="6" y="2" width="12" height="20" rx="2"/><path d="M11 18h2"/></svg>',
-    email: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m2 7 10 6 10-6"/></svg>'
+    email: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m2 7 10 6 10-6"/></svg>',
+    backupCode: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="8" cy="12" r="4"/><path d="M12 12h9M18 12v3M15 12v2"/></svg>'
 };
 
 function edcChannelRow(icon, name, detail, state) {
@@ -384,10 +385,21 @@ function edcRenderChannels(data) {
         rows.push(edcChannelRow(EDC_ICONS.email, host.dataset.email,
             data.emailMasked || "", host.dataset.sent));
     }
+    // Backup codes are not "sent" anywhere, so they read as Available, and they carry no detail
+    // text - there is no address or handle to show.
+    if (data.backupCode) {
+        rows.push(edcChannelRow(EDC_ICONS.backupCode, host.dataset.backupCode, "",
+            host.dataset.available));
+    }
     host.innerHTML = "";
     rows.forEach(function (row) { host.appendChild(row); });
     // No usable channel means no chooser: better than offering one that cannot deliver.
     host.hidden = rows.length === 0;
+    // The hint explains where to type a backup code, so it only appears when there are any.
+    var hint = document.getElementById("edcBackupCodeHint");
+    if (hint) {
+        hint.hidden = !data.backupCode;
+    }
     edcApplyExpiry(data.expiresAt);
 }
 
