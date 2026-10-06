@@ -28,10 +28,6 @@ dependencies {
     implementation("jakarta.ws.rs:jakarta.ws.rs-api:3.1.0")
 }
 
-tasks.withType<Test> {
-    useJUnitPlatform()
-}
-
 tasks.named<Jar>("jar") {
     manifest {
         attributes["Implementation-Title"] = project.name
