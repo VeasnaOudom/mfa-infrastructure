@@ -115,6 +115,15 @@ public class EdcMfaChannelsAuthenticatorFactory
         .defaultValue("")
         .add()
         .property()
+        .name(PrivacyIdeaSettings.KEY_PUBLIC_BASE_URL)
+        .label("Public Base URL")
+        .helpText("Origin that links and images in outbound mail should point at. Needed because "
+            + "Keycloak builds those from its own internal request address. Falls back to "
+            + "KEYCLOAK_PUBLIC_BASE_URL, then https://KC_HOSTNAME.")
+        .type(ProviderConfigProperty.STRING_TYPE)
+        .defaultValue("")
+        .add()
+        .property()
         .name(PrivacyIdeaSettings.KEY_EXPIRY_MINUTES)
         .label("OTP Expiry (minutes)")
         .helpText("Validity of a generated one-time code.")
@@ -129,6 +138,35 @@ public class EdcMfaChannelsAuthenticatorFactory
             + "expires. Falls back to PRIVACYIDEA_CHALLENGE_TTL_MINUTES.")
         .type(ProviderConfigProperty.INTEGER_TYPE)
         .defaultValue(30)
+        .add()
+        .property()
+        .name(PrivacyIdeaSettings.KEY_BACKUP_CODE_COUNT)
+        .label("Backup Codes per Set")
+        .helpText("How many single-use codes are issued at the end of enrolment. Ten suits someone "
+            + "who also has Telegram and an authenticator app; more suits someone who has no email "
+            + "address to fall back on. Falls back to PRIVACYIDEA_BACKUP_CODE_COUNT.")
+        .type(ProviderConfigProperty.INTEGER_TYPE)
+        .defaultValue(10)
+        .add()
+        .property()
+        .name(PrivacyIdeaSettings.KEY_BACKUP_CODE_LENGTH)
+        .label("Backup Code Digits")
+        .helpText("Digits per backup code. The sign-in code field is six boxes wide, so change this "
+            + "only together with the field. privacyIDEA would otherwise default to eight. Falls "
+            + "back to PRIVACYIDEA_BACKUP_CODE_LENGTH.")
+        .type(ProviderConfigProperty.INTEGER_TYPE)
+        .defaultValue(6)
+        .add()
+        .property()
+        .name(PrivacyIdeaSettings.KEY_ENROLMENT_GROUP)
+        .label("Enrolled Users Group")
+        .helpText("Group a user is added to when they finish enrolment, and removed from when their "
+            + "MFA is reset. Name only, not a path, so a group at the top level of the realm is "
+            + "matched by its name. Nothing here depends on it - the OTP gate reads the enrolment "
+            + "marker, not the group - but it is where an operator looks for who has a second step "
+            + "set up. Falls back to PRIVACYIDEA_ENROLMENT_GROUP, then MFA.")
+        .type(ProviderConfigProperty.STRING_TYPE)
+        .defaultValue("MFA")
         .add()
         .build();
   }
