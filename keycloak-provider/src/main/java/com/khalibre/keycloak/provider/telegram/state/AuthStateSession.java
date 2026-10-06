@@ -23,6 +23,13 @@ public class AuthStateSession extends AuthStateCache {
   }
 
   private static String getAuthStateId(KeycloakSession session, String sessionId) {
+    // Null here is normal, not exceptional: a plain REST request has no root authentication session,
+    // so there is no session id to look the state up by. singleUseObjects().get(null) throws rather
+    // than returning nothing, so guard it and let the caller see a missing state - which is what
+    // /status already reports as EXPIRED.
+    if (session == null || sessionId == null || sessionId.isBlank()) {
+      return null;
+    }
     Map<String, String> notes = session.singleUseObjects().get(sessionId);
     if (notes != null) {
       return notes.get(KEY_AUTH_STATE_ID);
@@ -31,6 +38,9 @@ public class AuthStateSession extends AuthStateCache {
   }
 
   private static void setAuthStateId(KeycloakSession session, String sessionId, String id) {
+    if (session == null || sessionId == null || sessionId.isBlank()) {
+      return;
+    }
     Map<String, String> notes = session.singleUseObjects().get(sessionId);
     if (notes == null) {
       notes = new HashMap<>();
