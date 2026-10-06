@@ -5,6 +5,9 @@ import static com.khalibre.keycloak.provider.telegram.idp.TelegramIdentityProvid
 import com.khalibre.keycloak.provider.telegram.bot.TelegramBotClient;
 import com.khalibre.keycloak.provider.telegram.state.AuthState;
 import com.khalibre.keycloak.provider.telegram.state.AuthStateSession;
+import com.khalibre.keycloak.provider.edc.EdcChannelDetector;
+import org.jboss.logging.Logger;
+
 import jakarta.annotation.Nonnull;
 import jakarta.ws.rs.GET;
 import jakarta.ws.rs.Path;
@@ -39,10 +42,18 @@ import org.keycloak.utils.StringUtil;
 public class TelegramIdentityProvider extends
   AbstractIdentityProvider<OAuth2IdentityProviderConfig> {
 
-  private static final String ATTR_TG_FIRST_NAME = "telegram-first-name";
-  private static final String ATTR_TG_LAST_NAME = "telegram-last-name";
-  private static final String ATTR_TG_USERNAME = "telegram-username";
-  private static final String ATTR_TG_USER_ID = "telegram-user-id";
+  private static final Logger log = Logger.getLogger(TelegramIdentityProvider.class);
+
+  /**
+   * Attribute names live on {@link EdcChannelDetector}, which is also how MFA enrolment links a
+   * Telegram account. Kept in one place because the channel detector has to read back what is
+   * written here, and two copies of an attribute name would fail quietly: the write would succeed
+   * and the channel would never appear.
+   */
+  private static final String ATTR_TG_FIRST_NAME = EdcChannelDetector.TELEGRAM_FIRST_NAME_ATTR;
+  private static final String ATTR_TG_LAST_NAME = EdcChannelDetector.TELEGRAM_LAST_NAME_ATTR;
+  private static final String ATTR_TG_USERNAME = EdcChannelDetector.TELEGRAM_USERNAME_ATTR;
+  private static final String ATTR_TG_USER_ID = EdcChannelDetector.TELEGRAM_USER_ID_ATTR;
   private static final String ATTR_TG_USER_PHONE_NUMBER = "telegram-phone-number";
   private static final String ATTR_TG_REQUIRE_PHONE_MATCH = "telegram-require-phone-match";
 
@@ -181,7 +192,7 @@ public class TelegramIdentityProvider extends
 
         AuthState auth = AuthStateSession.get(session, sessionId);
         if (auth == null || !"COMPLETED".equals(auth.getStatus())) {
-          return rejected(auth, "telegram.session-expired");
+          return telegramRejected(sessionId, auth, "telegram.session-expired");
         }
 
         boolean isLinkMode = authSession.getAuthNote("LINKING_IDENTITY_PROVIDER") != null;
@@ -192,7 +203,18 @@ public class TelegramIdentityProvider extends
           if (authenticatedUser == null
             || (isPhoneMatchRequired(authenticatedUser)
             && !isPhoneMatched(authenticatedUser, auth.getPhoneNumber()))) {
-            return rejected(auth, "telegram.link-phone-mismatch");
+            return telegramRejected(sessionId, auth, "telegram.link-phone-mismatch");
+          }
+          // One Telegram account belongs to one person. Without this, scanning the same phone from a
+          // second account links it too, and both accounts then receive codes at the same chat.
+          UserModel otherHolder = EdcChannelDetector.anotherUserHolding(session,
+            session.getContext().getRealm(), authenticatedUser, auth.getTelegramUserId());
+          if (otherHolder != null) {
+            log.warnf("method=authenticate chat=%s targetUser=%s alreadyHeldBy=%s "
+                + "message=TelegramAlreadyLinked",
+                auth.getTelegramUserId(), authenticatedUser.getUsername(),
+                otherHolder.getUsername());
+            return telegramRejected(sessionId, auth, "telegram.link-already-linked");
           }
           autoLinkUsername = authenticatedUser.getUsername();
         } else {
@@ -205,7 +227,7 @@ public class TelegramIdentityProvider extends
         if (accountLinked || autoLinkUsername != null) {
           sendToTelegram(auth, isLinkMode ? "telegram.link-success" : "telegram.login-success");
         } else {
-          return rejected(auth, isLinkMode ? "telegram.link-failed" : "telegram.login-failed");
+          return telegramRejected(sessionId, auth, isLinkMode ? "telegram.link-failed" : "telegram.login-failed");
         }
 
         BrokeredIdentityContext context = buildContext(
@@ -352,7 +374,9 @@ public class TelegramIdentityProvider extends
       return matchedUser != null && matchedUser.getId().equals(authenticatedUser.getId());
     }
 
-    private Response rejected(AuthState auth, String message) {
+    /** Refuse the scan, say why in the Telegram chat, and show the user an error. */
+    private Response telegramRejected(String sessionId, AuthState auth, String message) {
+      AuthStateSession.remove(session, sessionId);
       sendToTelegram(auth, message);
       event.event(EventType.IDENTITY_PROVIDER_LOGIN);
       event.error(Errors.IDENTITY_PROVIDER_LOGIN_FAILURE);
