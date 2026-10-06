@@ -122,7 +122,12 @@
                     <#if !(["usernamepassword", "username", "push", "passkey", "passkeyonly"]?seq_contains(authenticationForm.mode))
                     &&  !(authenticationForm.passkeyRegistration?has_content)>
                         <#if useBoxes>
-                            <div class="edc-otp">
+                            <div class="edc-otp" id="edcOtpSection">
+                                <#-- Everything a code would normally be entered into. pi-form.js hides
+                                     this whole block when the user has no channel at all, so the page
+                                     stops implying a code is on its way. The #otp input below stays
+                                     outside it: the form still submits that field. -->
+                                <div id="edcOtpContent">
                                 <h1 class="edc-otp-title">${msg('edc.otp.enterYourCode')}</h1>
                                 <p class="edc-otp-subtitle">${msg('edc.otp.enterYourCodeDescription')}</p>
                                 <#-- "Where we sent it" chooser. Rows are built by pi-form.js from the
@@ -196,6 +201,14 @@
                                 </div>
                                 <div class="edc-otp-note">
                                     <span>${msg('edc.otp.neverShare')}</span>
+                                </div>
+                                </div>
+                                <#-- No channel at all: there is no code to wait for and nothing the user
+                                     can type, so say what is actually wrong instead of showing an empty
+                                     code field. pi-form.js swaps this in from the /channels response. -->
+                                <div class="edc-enrol" id="edcEnrolRequired" hidden>
+                                    <h1 class="edc-otp-title">${msg('edc.enrol.requiredTitle')}</h1>
+                                    <p class="edc-otp-subtitle">${msg('edc.enrol.requiredBody')}</p>
                                 </div>
                             </#if>
                             <div>

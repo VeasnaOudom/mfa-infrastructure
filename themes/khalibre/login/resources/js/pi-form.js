@@ -368,6 +368,19 @@ function edcRenderChannels(data) {
     if (!host || !data) {
         return;
     }
+    // No channel means no code was sent and nothing can be typed. Swap the whole entry UI for an
+    // explanation, otherwise the page looks like it is waiting for a code that will never arrive.
+    var content = document.getElementById("edcOtpContent");
+    var enrol = document.getElementById("edcEnrolRequired");
+    if (content && enrol) {
+        content.hidden = !!data.enrolmentRequired;
+        enrol.hidden = !data.enrolmentRequired;
+        if (data.enrolmentRequired) {
+            // Nothing to count down and nothing to resend.
+            edcStopCountdown();
+            return;
+        }
+    }
     var rows = [];
     if (data.telegram) {
         var handle = data.telegramHandle || "";
@@ -528,6 +541,13 @@ function edcHideCodeExpired() {
     }
 }
 
+function edcStopCountdown() {
+    if (edcCountdownTimer !== null) {
+        window.clearInterval(edcCountdownTimer);
+        edcCountdownTimer = null;
+    }
+}
+
 function edcStartCountdown(deadlineMs) {
     var label = document.getElementById("edcOtpExpiryText");
     if (!label) {
@@ -535,10 +555,7 @@ function edcStartCountdown(deadlineMs) {
     }
     // A new code means a fresh countdown, so retract any expiry notice.
     edcHideCodeExpired();
-    if (edcCountdownTimer !== null) {
-        window.clearInterval(edcCountdownTimer);
-        edcCountdownTimer = null;
-    }
+    edcStopCountdown();
     label.style.fontWeight = 'bold';
     var tick = function () {
         var left = Math.max(0, Math.round((deadlineMs - Date.now()) / 1000));

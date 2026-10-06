@@ -211,9 +211,11 @@ public class EdcMfaEnrolmentRequiredAction
     LoginFormsProvider form = context.form();
     form.setAttribute("telegramAvailable", telegram);
     form.setAttribute("emailAvailable", email);
-    // Recommending Telegram when it is the only thing that can work for this person. Most staff have
-    // no email address on file, so for them it is the sole route in.
-    form.setAttribute("telegramRecommended", telegram && !email);
+    // Telegram is the default whenever the bot is configured, and carries the "Recommended" tag. It
+    // is the only channel that needs nothing arranged in advance: no email address on file, which
+    // most staff here do not have, and no second app to install. TOTP stays checked when Telegram is
+    // not configured, which the template handles from telegramAvailable.
+    form.setAttribute("telegramRecommended", telegram);
     form.setAttribute("error", errorKey);
     context.challenge(form.createForm("edc-mfa-enrol-choose.ftl"));
   }
