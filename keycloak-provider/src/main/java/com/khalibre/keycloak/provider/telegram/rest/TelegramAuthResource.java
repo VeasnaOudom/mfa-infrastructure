@@ -263,9 +263,10 @@ public class TelegramAuthResource implements RealmResourceProvider {
     } else if (!state.isPhoneNumberRequested()) {
       String chatId = state.getTelegramUserId();
       if (chatId == null) {
-        return Response.status(Status.INTERNAL_SERVER_ERROR)
-          .entity(Map.of("error", "Telegram chat ID is unavailable"))
-          .build();
+        // The bot has not seen the /start command yet, so there is nobody to prompt. A 500 here
+        // reads as "the server is broken" in the log and makes the enrolment page give up on
+        // polling; "not yet" is the honest answer and the page will ask again.
+        return Response.ok(Map.of("phoneRequired", false, "scanned", false)).build();
       }
       LoginFormsProvider formProvider = session.getProvider(LoginFormsProvider.class);
       String message = formProvider.getMessage("telegram.share-phone-number-prompt");
@@ -275,7 +276,7 @@ public class TelegramAuthResource implements RealmResourceProvider {
       AuthStateCache.store(state.getId(), state);
     }
 
-    return Response.ok(Map.of("phoneRequired", phoneRequired)).build();
+    return Response.ok(Map.of("phoneRequired", phoneRequired, "scanned", true)).build();
   }
 
   private boolean isAccountLinked(String alias, AuthState state) {
