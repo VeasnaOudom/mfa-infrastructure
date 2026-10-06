@@ -967,3 +967,304 @@ body.login-pf,
 [hidden] {
     display: none !important
 }
+
+/* ---- MFA enrolment ---- */
+
+/*
+ * The sign-in screens get their navy button from an #kc-login rule, which these screens do not
+ * have. Same look, expressed once rather than per button, and layered on top of the theme's own
+ * button classes so the padding and focus ring still come from PatternFly.
+ */
+/* Written as `button.edc-primary` because PatternFly's own `.pf-c-button.pf-m-primary` is two
+   classes and would otherwise win on specificity. */
+.login-pf-page button.edc-primary {
+  border-radius: 8px;
+  background: var(--edc-navy);
+  border-color: var(--edc-navy);
+  color: #fff;
+  font-weight: 600;
+}
+
+.login-pf-page button.edc-primary:hover,
+.login-pf-page button.edc-primary:focus {
+  background: var(--edc-navy-hover);
+  border-color: var(--edc-navy-hover);
+  color: #fff;
+}
+
+.login-pf-page button.edc-primary:active {
+  transform: translateY(1px);
+}
+
+/* Outlined counterpart, for the action that is offered but not the way forward. */
+.login-pf-page button.edc-secondary {
+  border-radius: 8px;
+  background: #fff;
+  border: 1px solid var(--edc-navy);
+  color: var(--edc-navy);
+  font-weight: 600;
+}
+
+.login-pf-page button.edc-secondary:hover,
+.login-pf-page button.edc-secondary:focus {
+  background: var(--edc-navy-soft);
+  color: var(--edc-navy);
+}
+
+
+/* Screen-reader-only: the six code boxes each carry a digit, so the field they
+   mirror needs a label the sighted layout can do without. */
+.edc-visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+.edc-alert {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin-bottom: 16px;
+    padding: 12px 14px;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--edc-ink);
+    background: var(--edc-danger-bg);
+    border: 1px solid var(--edc-danger-border);
+    border-radius: 10px;
+}
+
+/* Informational rather than cautionary: pale blue with a navy edge, the way the
+   rest of the sign-in screens flag something the user should know. The amber
+   .edc-otp-note is reserved for warnings. */
+.edc-note-info {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin: 16px 0 20px;
+    padding: 12px 14px;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--edc-ink);
+    background: #eef4fd;
+    border: 1px solid #cfe0f8;
+    border-left: 3px solid var(--edc-navy);
+    border-radius: 10px;
+}
+
+/* ---- channel chooser ---- */
+
+/* A radio styled as a card: the whole row is the target, which is what makes this
+   usable on a phone. The control stays on the right and real, so keyboard and
+   screen-reader behaviour is unchanged. */
+.edc-channels-lg {
+    margin: 20px 0 24px;
+    gap: 10px;
+}
+
+.edc-channels-lg .edc-option {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 14px 16px;
+    background: #f7f9fc;
+    border: 1px solid #e3e8f0;
+    border-radius: 12px;
+    cursor: pointer;
+    transition: border-color .15s ease, box-shadow .15s ease, background .15s ease;
+}
+
+.edc-channels-lg .edc-option:hover {
+    border-color: var(--edc-navy-border);
+}
+
+.edc-channels-lg .edc-option:has(.edc-option-input:focus-visible) {
+    border-color: var(--edc-blue);
+    box-shadow: 0 0 0 3px rgba(30, 111, 214, .16);
+}
+
+/* Selected reads at a glance from a metre away, which matters on the only screen
+   most of this workforce will ever see. */
+.edc-channels-lg .edc-option:has(.edc-option-input:checked) {
+    background: var(--edc-card);
+    border-color: var(--edc-blue);
+    box-shadow: 0 0 0 1px var(--edc-blue);
+}
+
+.edc-channels-lg .edc-option-input {
+    flex: 0 0 auto;
+    width: 18px;
+    height: 18px;
+    margin: 0;
+    accent-color: var(--edc-blue);
+    cursor: pointer;
+}
+
+.edc-channels-lg .edc-option-off {
+    opacity: .6;
+    cursor: not-allowed;
+}
+
+.edc-channels-lg .edc-option-off .edc-option-input {
+    cursor: not-allowed;
+}
+
+/* Sits beside the channel name, so the name and its recommendation read as one thing. */
+.edc-tag {
+    display: inline-block;
+    margin-left: 8px;
+    font-size: 11.5px;
+    font-weight: 700;
+    letter-spacing: .04em;
+    padding: 4px 10px;
+    color: var(--edc-blue);
+    background: #e8f0fd;
+    border-radius: 999px;
+    vertical-align: 1px;
+}
+
+.edc-tag-off {
+    color: var(--edc-slate);
+    background: #eef1f6;
+}
+
+.edc-channels-lg .edc-channel-name {
+    font-size: 14.5px;
+    font-weight: 600;
+    color: var(--edc-navy);
+}
+
+.edc-channels-lg .edc-channel-detail {
+    font-size: 12.5px;
+    /* The OTP page truncates its detail line to one row; on the chooser the whole sentence
+       matters, because it is often the only thing saying the channel cannot work. */
+    white-space: normal;
+    overflow: visible;
+}
+
+.edc-qr {
+    display: flex;
+    justify-content: center;
+    margin: 20px auto;
+    padding: 18px;
+    background: #fff;
+    border: 1px solid #e3e8f0;
+    border-radius: 14px;
+    width: fit-content;
+    min-height: 244px;
+}
+
+.edc-waiting {
+    margin: 0 0 6px;
+    font-size: 13.5px;
+    line-height: 1.5;
+    color: var(--edc-slate);
+    text-align: center;
+    text-wrap: balance;
+}
+
+.edc-waiting b {
+    color: var(--edc-navy);
+    font-variant-numeric: tabular-nums;
+}
+
+.edc-link-button {
+    background: none;
+    border: 0;
+    padding: 0;
+    font: inherit;
+    font-size: 13px;
+    color: var(--edc-blue);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    cursor: pointer;
+}
+
+.edc-setup-key {
+    margin: 0 0 8px;
+    font-size: 13px;
+    color: var(--edc-slate);
+}
+
+.edc-setup-key summary {
+    cursor: pointer;
+}
+
+.edc-setup-key code {
+    display: block;
+    margin-top: 6px;
+    padding: 8px 10px;
+    word-break: break-all;
+    background: #f7f9fc;
+    border: 1px solid #e3e8f0;
+    border-radius: 8px;
+}
+
+/* ---- backup codes ---- */
+
+/* Two columns because ten codes in one column run off a phone screen. Dashed edge
+   so it reads as "this was printed for you", not as a form field. */
+.edc-codes {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px 28px;
+    margin: 22px 0;
+    padding: 22px 24px;
+    font-variant-numeric: tabular-nums;
+    font-size: 18px;
+    letter-spacing: .14em;
+    color: var(--edc-ink);
+    background: #f7f9fc;
+    border: 1px dashed var(--edc-navy-border);
+    border-radius: 14px;
+}
+
+.edc-code {
+    text-align: center;
+}
+
+.edc-note {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    margin: 4px 0 22px;
+    padding-top: 16px;
+    font-size: 13px;
+    line-height: 1.55;
+    color: var(--edc-body);
+    border-top: 1px solid var(--edc-border);
+}
+
+.edc-note strong {
+    color: var(--edc-ink);
+}
+
+.edc-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+}
+
+@media (max-width: 480px) {
+    .edc-actions {
+        flex-direction: column-reverse;
+    }
+    .edc-actions button {
+        width: 100%;
+    }
+    .edc-codes {
+        font-size: 16px;
+        gap: 10px 16px;
+        padding: 16px;
+    }
+    .edc-channels-lg .edc-option {
+        padding: 12px;
+        gap: 10px;
+    }
+}
