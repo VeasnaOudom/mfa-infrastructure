@@ -5,9 +5,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.khalibre.keycloak.provider.edc.EdcChallengeToken;
 import com.khalibre.keycloak.provider.edc.EdcChannelDetector;
 import com.khalibre.keycloak.provider.edc.EdcMfaChannelsAuthenticator;
-import com.khalibre.keycloak.provider.privacyIdea.PrivacyIdeaSettings.Settings;
+import com.khalibre.keycloak.provider.edc.EdcOtpDelivery;
 import com.khalibre.keycloak.provider.privacyIdea.service.PrivacyIdeaService;
-import com.khalibre.keycloak.provider.telegram.bot.TelegramBotClient;
+import com.khalibre.keycloak.provider.telegram.state.AuthState;
+import com.khalibre.keycloak.provider.telegram.state.AuthStateSession;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.GET;
 import jakarta.ws.rs.POST;
@@ -16,39 +17,21 @@ import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
-import java.net.URI;
-import java.net.URLEncoder;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.nio.charset.StandardCharsets;
-import java.security.SecureRandom;
-import java.time.Instant;
-import java.time.OffsetDateTime;
-import java.time.ZoneId;
-import java.time.ZoneOffset;
-import java.time.ZonedDateTime;
-import java.time.format.DateTimeFormatter;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
-import org.apache.http.HttpStatus;
 import org.jboss.logging.Logger;
-import org.keycloak.broker.oidc.OAuth2IdentityProviderConfig;
-import org.keycloak.email.EmailException;
-import org.keycloak.email.EmailTemplateProvider;
-import org.keycloak.models.IdentityProviderModel;
+import org.keycloak.models.FederatedIdentityModel;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.RealmModel;
 import org.keycloak.models.UserModel;
+import org.keycloak.services.managers.AuthenticationSessionManager;
 import org.keycloak.services.resource.RealmResourceProvider;
+import org.keycloak.sessions.RootAuthenticationSessionModel;
 
 public class PrivacyIdeaWebhookResource implements RealmResourceProvider {
 
   private static final Logger log = Logger.getLogger(PrivacyIdeaWebhookResource.class);
-  private static final HttpClient httpClient = HttpClient.newHttpClient();
   private static final ObjectMapper objectMapper = new ObjectMapper();
 
   /**
@@ -58,19 +41,6 @@ public class PrivacyIdeaWebhookResource implements RealmResourceProvider {
   private static final List<String> USERNAME_FIELDS = List.of("username", "logged_in_user");
 
   private static final List<String> CLIENT_IP_FIELDS = List.of("client_ip", "client", "ip");
-
-  private static final ZoneId OTP_TIME_ZONE = ZoneId.systemDefault();
-
-  private static final DateTimeFormatter OTP_DATE_FORMAT =
-      DateTimeFormatter.ofPattern("d MMMM yyyy", Locale.ENGLISH);
-
-  private static final DateTimeFormatter OTP_TIME_FORMAT =
-      DateTimeFormatter.ofPattern("HH:mm");
-
-  private static final String TELEGRAM_IDP_ALIAS = "telegram";
-
-  private static final DateTimeFormatter OTP_EXPIRY_FORMAT =
-      DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ssxxx");
 
   private final KeycloakSession session;
   private final PrivacyIdeaSettings.Settings settings;
@@ -219,19 +189,17 @@ public class PrivacyIdeaWebhookResource implements RealmResourceProvider {
   }
 
   /**
-   * Regenerates the SPASS PIN for the token, stores its expiry and delivers the code over every
-   * channel the user has set up.
+   * Regenerates the SPASS PIN for the token and delivers the code over every channel the user has.
    *
    * @return the freshly issued code
    */
   private String issueOtp(RealmModel realm, UserModel user, String tokenSerial,
       String adminAuthToken, String clientIp) throws Exception {
-    String otpCode = String.format("%06d", new SecureRandom().nextInt(1000000));
-    setPrivacyIdeaPin(tokenSerial, otpCode, adminAuthToken);
-    setPrivacyIdeaPinExpiry(tokenSerial, adminAuthToken);
-    sendOtpEmail(realm, user, otpCode, clientIp);
-    sendOtpTelegram(user, otpCode, spassExpiryMinutes);
-    return otpCode;
+    // Shared with MFA enrolment, which enrols an email channel and has to deliver to it the same
+    // way sign-in does. Two copies would be two places for the mail and the bot message to drift.
+    return EdcOtpDelivery.issue(session, realm, user, settings,
+        new PrivacyIdeaService(baseUrl, adminUsername, adminPassword), adminAuthToken,
+        tokenSerial, clientIp);
   }
 
   /**
@@ -268,6 +236,8 @@ public class PrivacyIdeaWebhookResource implements RealmResourceProvider {
     channels.put("totp", "1".equals(detected.get(EdcMfaChannelsAuthenticator.NOTE_TOTP)));
     channels.put("telegram", "1".equals(detected.get(EdcMfaChannelsAuthenticator.NOTE_TELEGRAM)));
     channels.put("backupCode", "1".equals(detected.get(EdcMfaChannelsAuthenticator.NOTE_BACKUP_CODE)));
+    channels.put("enrolmentRequired",
+        "1".equals(detected.get(EdcMfaChannelsAuthenticator.NOTE_ENROLMENT_REQUIRED)));
     channels.put("masked", "1".equals(detected.get(EdcMfaChannelsAuthenticator.NOTE_MASKED)));
     channels.put("telegramHandle", detected.get(EdcMfaChannelsAuthenticator.NOTE_TELEGRAM_HANDLE));
     channels.put("emailMasked", detected.get(EdcMfaChannelsAuthenticator.NOTE_EMAIL_MASKED));
@@ -292,6 +262,107 @@ public class PrivacyIdeaWebhookResource implements RealmResourceProvider {
     log.infof("method=channels status=SUCCESS username=%s email=%s totp=%s telegram=%s",
         user.getUsername(), channels.get("email"), channels.get("totp"), channels.get("telegram"));
     return Response.ok(channels, MediaType.APPLICATION_JSON).build();
+  }
+
+  /**
+   * Completes Telegram linking during MFA enrolment.
+   *
+   * <p>The enrolment screen shows the same QR code and polls the same endpoints the identity
+   * provider uses, so the bot side needed no changes. What it cannot do is hand the result to the
+   * identity provider's callback: that only runs for a broker round trip, and enrolment is not one.
+   * So the link is written here instead - the same federated identity and the same attributes the
+   * broker would have written - from the AuthState the scan produced.
+   *
+   * <p>Authorised exactly like {@link #channels}: the caller must be the user already past the
+   * first factor, proven by the signed challenge cookie.
+   */
+  @POST
+  @Path("/enrolment/telegram-link")
+  @Consumes(MediaType.APPLICATION_JSON)
+  @Produces(MediaType.APPLICATION_JSON)
+  public Response linkTelegram() {
+    String username = challengeCookieUser();
+    if (username == null || username.isBlank()) {
+      log.warn("method=linkTelegram status=UNAUTHORIZED message=No valid challenge cookie");
+      return Response.status(Response.Status.UNAUTHORIZED).build();
+    }
+
+    RealmModel realm = session.getContext().getRealm();
+    UserModel user = session.users().getUserByUsername(realm, username);
+    if (user == null) {
+      user = session.users().getUserByEmail(realm, username);
+    }
+    if (user == null || !user.isEnabled()) {
+      return Response.status(Response.Status.NOT_FOUND).build();
+    }
+
+    // The AuthState is filed under the root authentication session, the same key the QR endpoint
+    // wrote it under. Without that session there is no completed scan to read, and claiming
+    // otherwise would let anyone link any Telegram account to any account.
+    RootAuthenticationSessionModel rootSession =
+        new AuthenticationSessionManager(session).getCurrentRootAuthenticationSession(realm);
+    if (rootSession == null) {
+      return Response.status(Response.Status.BAD_REQUEST)
+          .entity(Map.of("error", "No active sign-in for this browser")).build();
+    }
+
+    AuthState state = AuthStateSession.get(session, rootSession.getId());
+    if (state == null || state.getTelegramUserId() == null) {
+      return Response.status(Response.Status.NOT_FOUND)
+          .entity(Map.of("error", "No Telegram scan in progress")).build();
+    }
+    if (state.isExpired()) {
+      AuthStateSession.remove(session, rootSession.getId());
+      return Response.status(Response.Status.GONE)
+          .entity(Map.of("error", "Telegram code expired")).build();
+    }
+    if (!"COMPLETED".equals(state.getStatus())) {
+      return Response.status(Response.Status.CONFLICT)
+          .entity(Map.of("error", "Telegram scan not finished yet", "status", state.getStatus()))
+          .build();
+    }
+
+    String alias = EdcChannelDetector.TELEGRAM_IDP_ALIAS;
+    String chatId = state.getTelegramUserId();
+
+    // A Telegram account may only ever belong to one Keycloak user, or codes would be delivered to
+    // the wrong person. Checked before writing, not after - and against the user attribute as well
+    // as the federated identity, because that row does not reliably survive on this realm's
+    // LDAP-backed users while the attribute does. Checking the row alone let a second account
+    // claim a chat that was already in use.
+    UserModel owner = session.users().getUserByFederatedIdentity(realm,
+        new FederatedIdentityModel(alias, chatId, null));
+    if (owner == null) {
+      owner = EdcChannelDetector.anotherUserHolding(session, realm, user, chatId);
+    }
+    if (owner != null && !owner.getId().equals(user.getId())) {
+      log.warnf("method=linkTelegram status=CONFLICT username=%s chat=%s alsoHeldBy=%s "
+          + "message=TelegramAlreadyLinked", user.getUsername(), chatId, owner.getUsername());
+      return Response.status(Response.Status.CONFLICT)
+          .entity(Map.of("error", "That Telegram account is already linked to another user"))
+          .build();
+    }
+
+    if (session.users().getFederatedIdentity(realm, user, alias) == null) {
+      session.users().addFederatedIdentity(realm, user,
+          new FederatedIdentityModel(alias, chatId, state.getUsername()));
+    } else {
+      session.users().updateFederatedIdentity(realm, user,
+          new FederatedIdentityModel(alias, chatId, state.getUsername()));
+    }
+
+    // Written the way the brokered-identity flow writes them: in process, because LDAP federation
+    // drops attributes pushed through the admin API.
+    user.setSingleAttribute(EdcChannelDetector.TELEGRAM_USER_ID_ATTR, chatId);
+    user.setSingleAttribute(EdcChannelDetector.TELEGRAM_USERNAME_ATTR, state.getUsername());
+    user.setSingleAttribute(EdcChannelDetector.TELEGRAM_FIRST_NAME_ATTR, state.getFirstName());
+    user.setSingleAttribute(EdcChannelDetector.TELEGRAM_LAST_NAME_ATTR, state.getLastName());
+
+    // Single use: a second enrolment attempt must start from a fresh scan.
+    AuthStateSession.remove(session, rootSession.getId());
+
+    log.infof("method=linkTelegram status=SUCCESS username=%s", user.getUsername());
+    return Response.ok(Map.of("status", "ok"), MediaType.APPLICATION_JSON).build();
   }
 
   @POST
@@ -379,125 +450,6 @@ public class PrivacyIdeaWebhookResource implements RealmResourceProvider {
     String ip = extractField(body, CLIENT_IP_FIELDS);
     return ip == null || ip.isBlank() ? "unknown" : ip;
   }
-
-  private void setPrivacyIdeaPin(String serial, String otpCode, String adminToken)
-      throws Exception {
-    String endpoint = String.format("%s/token/setpin/%s?otppin=%s", baseUrl, serial, otpCode);
-
-    HttpRequest request = HttpRequest.newBuilder()
-        .uri(URI.create(endpoint))
-        .header("Authorization", adminToken)
-        .POST(HttpRequest.BodyPublishers.noBody())
-        .build();
-
-    HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-    if (response.statusCode() != HttpStatus.SC_OK) {
-      log.errorf("method=setPrivacyIdeaPin serial=%s httpStatus=%d", serial, response.statusCode());
-      throw new RuntimeException("Failed to set OTP PIN in privacyIDEA");
-    }
-  }
-
-  private void setPrivacyIdeaPinExpiry(String serial, String adminToken) throws Exception {
-    // validity_period_end must be an ISO-8601 timestamp, not epoch seconds. privacyIDEA accepts
-    // any value when writing it, but /validate/check parses it as a date, so an epoch integer
-    // makes every later OTP check fail with
-    // ValueError: year <epoch> is out of range.
-    OffsetDateTime expiry = OffsetDateTime.ofInstant(
-        Instant.now().plusSeconds(spassExpiryMinutes * 60L), ZoneOffset.UTC);
-    String endpoint = String.format("%s/token/info/%s/validity_period_end?value=%s", baseUrl,
-        serial, URLEncoder.encode(expiry.format(OTP_EXPIRY_FORMAT), StandardCharsets.UTF_8));
-
-    HttpRequest request = HttpRequest.newBuilder()
-        .uri(URI.create(endpoint))
-        .header("Authorization", adminToken)
-        .POST(HttpRequest.BodyPublishers.noBody())
-        .build();
-
-    HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-    if (response.statusCode() != HttpStatus.SC_OK) {
-      log.warnf("method=setPrivacyIdeaPinExpiry serial=%s httpStatus=%d", serial,
-          response.statusCode());
-    }
-  }
-
-  /**
-   * Delivers the code through the Telegram bot when the user has linked Telegram and the bot is
-   * configured. Both are optional: without a telegram identity provider there is no bot token, and
-   * without the telegram-user-id attribute the user never linked, so this is a no-op in both cases
-   * rather than an error.
-   */
-  private void sendOtpTelegram(UserModel user, String otpCode, int expiryMinutes) {
-    // Falls back to the linked Telegram identity because LDAP federation discards the attribute.
-    String chatId = EdcChannelDetector.telegramChatId(session, user);
-    if (chatId == null || chatId.isBlank()) {
-      log.infof("method=sendOtpTelegram user=%s message=NoTelegramIdentity", user.getUsername());
-      return;
-    }
-
-    IdentityProviderModel idp = session.identityProviders().getByAlias(TELEGRAM_IDP_ALIAS);
-    if (idp == null) {
-      log.warnf("method=sendOtpTelegram username=%s message=No telegram IdP configured, skipping",
-          user.getUsername());
-      return;
-    }
-
-    String botToken = new OAuth2IdentityProviderConfig(idp).getClientSecret();
-    if (botToken == null || botToken.isBlank()) {
-      log.warnf("method=sendOtpTelegram username=%s message=Telegram IdP has no bot token, skipping",
-          user.getUsername());
-      return;
-    }
-
-    try {
-      // HTML so the code stands out; otpCode is digits only, so no entity escaping is needed.
-      String text = String.format("Your EDC verification code is <b>%s</b>. It is valid for %d minutes.",
-          otpCode, expiryMinutes);
-      new TelegramBotClient(botToken).sendMessage(chatId, text, null, "HTML");
-      log.infof("method=sendOtpTelegram status=SENT username=%s", user.getUsername());
-    } catch (Exception e) {
-      log.errorf(e, "method=sendOtpTelegram status=ERROR username=" + user.getUsername());
-    }
-  }
-
-  private void sendOtpEmail(RealmModel realm, UserModel user, String otpCode, String clientIp)
-      throws EmailException {
-    EmailTemplateProvider emailProvider = session.getProvider(EmailTemplateProvider.class);
-    emailProvider.setRealm(realm);
-    emailProvider.setUser(user);
-
-    // send() takes a message key for the subject and a freemarker template file name, not raw HTML.
-    // Keycloak renders text/<template> and html/<template> from the realm's email theme; both are
-    // provided by themes/khalibre/email. The map must be mutable: processTemplate adds locale,
-    // msg, properties, realmName, user and url to it.
-    ZonedDateTime issuedAt = ZonedDateTime.now(OTP_TIME_ZONE);
-    Map<String, Object> attributes = new HashMap<>();
-    attributes.put("otp", otpCode);
-    // Grouped in threes so a mistyped digit is obvious, e.g. 492 718.
-    attributes.put("otpFormatted",
-        otpCode.replaceFirst("^(\\p{Digit}{3})(\\p{Digit}{3})$", "$1\u2002$2"));
-    attributes.put("expiryMinutes", spassExpiryMinutes);
-    attributes.put("requestDate", issuedAt.format(OTP_DATE_FORMAT));
-    attributes.put("requestTime", issuedAt.format(OTP_TIME_FORMAT));
-    attributes.put("clientIp", clientIp);
-    attributes.put("appName", realm.getDisplayName() != null && !realm.getDisplayName().isBlank()
-        ? realm.getDisplayName()
-        : realm.getName());
-    attributes.put("otpEmailBaseUrl", settings.publicBaseUrl());
-    emailProvider.send("otpEmailSubject", "privacyidea-otp.ftl", attributes);
-  }
-
-  /**
-   * Origin that email clients should use to fetch theme resources such as the logo.
-   *
-   * The {@code url} bean available to email templates is built from the server's own request base
-   * URI, so it yields the internal host and port (for example {@code http://keycloak:8080}) rather
-   * than the address recipients can reach. It is therefore per-environment configuration, not
-   * something a locale message file can carry.
-   *
-   * <p>Resolved by {@link Settings#publicBaseUrl()}: the {@code publicBaseUrl} field on the EDC MFA
-   * Channels execution wins, then {@code KEYCLOAK_PUBLIC_BASE_URL}, then {@code https://} plus
-   * {@code KC_HOSTNAME}.
-   */
 
   @Override
   public void close() {

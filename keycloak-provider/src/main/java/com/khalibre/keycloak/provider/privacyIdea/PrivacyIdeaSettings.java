@@ -33,6 +33,9 @@ public final class PrivacyIdeaSettings {
   public static final String KEY_PUBLIC_BASE_URL = "publicBaseUrl";
   public static final String KEY_EXPIRY_MINUTES = "spassExpiryMinutes";
   public static final String KEY_CHALLENGE_TTL_MINUTES = "challengeTtlMinutes";
+  public static final String KEY_BACKUP_CODE_COUNT = "backupCodeCount";
+  public static final String KEY_BACKUP_CODE_LENGTH = "backupCodeLength";
+  public static final String KEY_ENROLMENT_GROUP = "enrolmentGroup";
 
   /** Provider id of the execution whose configuration holds the canonical values. */
   private static final String OWNING_PROVIDER_ID = "edc-mfa-channels";
@@ -50,7 +53,10 @@ public final class PrivacyIdeaSettings {
         pick(admin, KEY_PUBLIC_BASE_URL, "KEYCLOAK_PUBLIC_BASE_URL", ""),
         parseInt(pick(admin, KEY_EXPIRY_MINUTES, null, "5"), 5),
         parseInt(pick(admin, KEY_CHALLENGE_TTL_MINUTES, "PRIVACYIDEA_CHALLENGE_TTL_MINUTES", "30"),
-            30));
+            30),
+        parseInt(pick(admin, KEY_BACKUP_CODE_COUNT, "PRIVACYIDEA_BACKUP_CODE_COUNT", "10"), 10),
+        parseInt(pick(admin, KEY_BACKUP_CODE_LENGTH, "PRIVACYIDEA_BACKUP_CODE_LENGTH", "6"), 6),
+        pick(admin, KEY_ENROLMENT_GROUP, "PRIVACYIDEA_ENROLMENT_GROUP", "MFA"));
   }
 
   /**
@@ -126,7 +132,20 @@ public final class PrivacyIdeaSettings {
   /** Immutable snapshot of the resolved settings. */
   public record Settings(String baseUrl, String adminUsername, String adminPassword,
       String webhookSecret, String publicBaseUrl, int spassExpiryMinutes,
-      int challengeTtlMinutes) {
+      int challengeTtlMinutes, int backupCodeCount, int backupCodeLength,
+      String enrolmentGroup) {
+
+    public Settings {
+      // Clamped here rather than at each use site: a bad admin-console value would otherwise turn
+      // into a zero-code enrolment, and zero codes is exactly the state that locks staff out.
+      backupCodeCount = backupCodeCount < 1 ? 10 : Math.min(backupCodeCount, 100);
+      backupCodeLength = backupCodeLength < 4 ? 6 : Math.min(backupCodeLength, 12);
+      // A blank group name would silently record nothing, which reads as success. Fall back to the
+      // name this realm already uses rather than joining nothing and claiming it worked.
+      if (enrolmentGroup == null || enrolmentGroup.isBlank()) {
+        enrolmentGroup = "MFA";
+      }
+    }
 
     public String baseUrlTrimmed() {
       return baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
@@ -134,6 +153,24 @@ public final class PrivacyIdeaSettings {
 
     public boolean hasSecret() {
       return webhookSecret != null && !webhookSecret.isBlank();
+    }
+
+    /**
+     * Parameters for enrolling a TAN token of backup codes.
+     *
+     * <p>Two things are pinned deliberately. {@code otplen} because privacyIDEA derives an eight
+     * digit length otherwise and the code field here is six boxes wide. {@code tantoken_count}
+     * because that is the name the token class actually reads - the intuitive {@code tan.count} is
+     * silently ignored and you get the 100-code default.
+     */
+    public Map<String, String> backupCodeTokenParams() {
+      return Map.of("tantoken_count", Integer.toString(backupCodeCount),
+          "otplen", Integer.toString(backupCodeLength));
+    }
+
+    /** Parameters matching the TOTP tokens this deployment already issues. */
+    public Map<String, String> totpTokenParams() {
+      return Map.of("timeStep", "30", "hashlib", "sha1", "timeWindow", "180");
     }
 
     /**
