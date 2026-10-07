@@ -44,14 +44,6 @@ type EventsTableProps = {
   onPerPage: (perPage: number) => void;
 };
 
-/** Detail keys rendered as a "Key: value" list. */
-const DETAIL_LABELS: Record<string, string> = {
-  auth_method: "accountActivitiesDetailAuthMethod",
-  identity_provider: "accountActivitiesDetailIdentityProvider",
-  identity_provider_auth_method: "accountActivitiesDetailIdpAuthMethod",
-  auth_method_details: "accountActivitiesDetailAuthMethodDetails",
-};
-
 export type EventsFilter = {
   type: string[];
   dateFrom: string;
@@ -103,6 +95,19 @@ export const EventsTable = ({
     draftFilter.dateFrom !== "" ||
     draftFilter.dateTo !== "" ||
     draftFilter.ipAddress !== "";
+
+  const getDeviceLabel = (activity: AccountActivity): string => {
+    if (activity.details == null || Object.keys(activity.details).length === 0) {
+      return t("accountActivitiesUnknownDevice");
+    }
+
+    const device = activity.details?.device;
+    if (device != null && device.trim() !== "") {
+      return device;
+    }
+    return t("accountActivitiesUnknownDevice");
+  };
+
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -380,8 +385,8 @@ export const EventsTable = ({
                 <Th style={{verticalAlign: 'middle'}}>{t("accountActivitiesDate")}</Th>
                 <Th style={{verticalAlign: 'middle'}}>{t("accountActivitiesEvent")}</Th>
                 <Th style={{verticalAlign: 'middle'}}>{t("accountActivitiesClient")}</Th>
+                <Th style={{verticalAlign: 'middle'}}>{t("accountActivitiesDevice")}</Th>
                 <Th style={{verticalAlign: 'middle'}}>{t("accountActivitiesIpAddress")}</Th>
-                <Th style={{verticalAlign: 'middle'}}>{t("accountActivitiesDetails")}</Th>
                 <Th style={{verticalAlign: 'middle'}}>{t("accountActivitiesResult")}</Th>
               </Tr>
             </Thead>
@@ -399,9 +404,7 @@ export const EventsTable = ({
               ) : (
                 activities.map((activity, index) => {
                   const typeKey = eventTypeKey(activity.type);
-                  const details = Object.entries(activity.details ?? {}).filter(
-                    ([key]) => key in DETAIL_LABELS,
-                  );
+                  const device = getDeviceLabel(activity);
 
                   return (
                     <Tr key={`${activity.time}-${index}`}>
@@ -426,23 +429,12 @@ export const EventsTable = ({
                         {activity.clientId ?? "-"}
                       </Td>
                       <Td style={{verticalAlign: 'middle'}}
-                          dataLabel={t("accountActivitiesIpAddress")}>
-                        {activity.ipAddress ?? "-"}
+                          dataLabel={t("accountActivitiesDevice")}>
+                        {device}
                       </Td>
                       <Td style={{verticalAlign: 'middle'}}
-                          dataLabel={t("accountActivitiesDetails")}>
-                        {details.length === 0 ? (
-                          "-"
-                        ) : (
-                          <dl>
-                            {details.map(([key, value]) => (
-                              <div key={key}>
-                                <dt>{t(DETAIL_LABELS[key])}</dt>
-                                <dd>{value}</dd>
-                              </div>
-                            ))}
-                          </dl>
-                        )}
+                          dataLabel={t("accountActivitiesIpAddress")}>
+                        {activity.ipAddress ?? "-"}
                       </Td>
                       <Td style={{verticalAlign: 'middle'}}
                           dataLabel={t("accountActivitiesResult")}>

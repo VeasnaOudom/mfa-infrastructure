@@ -48,7 +48,7 @@ public class AccountActivitiesResource implements RealmResourceProvider {
 
   /** Detail keys that are safe to render for the end user. */
   private static final Set<String> ALLOWED_DETAIL_KEYS =
-      Set.of("auth_method", "identity_provider", "identity_provider_auth_method", "auth_method_details");
+      Set.of("auth_method", "identity_provider", "identity_provider_auth_method", "auth_method_details", "device");
 
   private static final int DEFAULT_MAX_RESULTS = 25;
   private static final int MAX_ALLOWED_RESULTS = 100;
