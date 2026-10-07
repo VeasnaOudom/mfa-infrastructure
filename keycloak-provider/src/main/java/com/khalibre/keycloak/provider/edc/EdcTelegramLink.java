@@ -1,15 +1,14 @@
 package com.khalibre.keycloak.provider.edc;
 
+import com.khalibre.keycloak.provider.telegram.bot.TelegramNotifier;
+import com.khalibre.keycloak.provider.telegram.state.AuthState;
+import com.khalibre.keycloak.provider.util.FederatedIdentity;
 import java.util.Map;
-
 import org.jboss.logging.Logger;
 import org.keycloak.models.FederatedIdentityModel;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.RealmModel;
 import org.keycloak.models.UserModel;
-
-import com.khalibre.keycloak.provider.telegram.bot.TelegramNotifier;
-import com.khalibre.keycloak.provider.telegram.state.AuthState;
 
 /**
  * Writes a completed Telegram scan onto a Keycloak user.
@@ -78,8 +77,7 @@ public final class EdcTelegramLink {
     String alias = EdcChannelDetector.TELEGRAM_IDP_ALIAS;
     String chatId = state.getTelegramUserId();
 
-    UserModel owner = session.users().getUserByFederatedIdentity(realm,
-        new FederatedIdentityModel(alias, chatId, null));
+    UserModel owner = FederatedIdentity.getUserByTelegramChat(session, realm, alias, chatId);
     if (owner == null) {
       owner = EdcChannelDetector.anotherUserHolding(session, realm, user, chatId);
     }

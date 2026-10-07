@@ -5,6 +5,7 @@ import static com.khalibre.keycloak.provider.telegram.idp.TelegramIdentityProvid
 import com.khalibre.keycloak.provider.telegram.bot.TelegramNotifier;
 import com.khalibre.keycloak.provider.telegram.state.AuthState;
 import com.khalibre.keycloak.provider.telegram.state.AuthStateSession;
+import com.khalibre.keycloak.provider.util.FederatedIdentity;
 import com.khalibre.keycloak.provider.edc.EdcChannelDetector;
 import org.jboss.logging.Logger;
 
@@ -257,14 +258,9 @@ public class TelegramIdentityProvider extends
         return false;
       }
 
-      RealmModel realm = session.getContext().getRealm();
-      FederatedIdentityModel socialLink = new FederatedIdentityModel(
-        alias,
-        state.getTelegramUserId(),
-        null
-      );
-      UserModel user = session.users().getUserByFederatedIdentity(realm, socialLink);
-      return user != null;
+      return FederatedIdentity.isTelegramChatLinked(session,
+        session.getContext().getRealm(), alias,
+        state.getTelegramUserId());
     }
 
     private UserModel findAuthenticatedUser(AuthenticationSessionModel authSession) {

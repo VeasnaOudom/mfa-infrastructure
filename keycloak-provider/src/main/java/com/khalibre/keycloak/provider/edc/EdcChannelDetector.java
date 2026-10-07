@@ -1,6 +1,7 @@
 package com.khalibre.keycloak.provider.edc;
 
 import com.khalibre.keycloak.provider.privacyIdea.service.PrivacyIdeaService;
+import com.khalibre.keycloak.provider.util.FederatedIdentity;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -268,8 +269,8 @@ public final class EdcChannelDetector {
       return null;
     }
     try {
-      UserModel owner = session.users().getUserByFederatedIdentity(realm,
-          new FederatedIdentityModel(TELEGRAM_IDP_ALIAS, chatId, null));
+      UserModel owner = FederatedIdentity.getUserByTelegramChat(session, realm,
+          TELEGRAM_IDP_ALIAS, chatId);
       if (owner != null && !owner.getId().equals(user.getId())) {
         return owner;
       }

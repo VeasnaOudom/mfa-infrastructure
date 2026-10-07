@@ -9,6 +9,7 @@ import com.khalibre.keycloak.provider.telegram.bot.TelegramBotManager;
 import com.khalibre.keycloak.provider.telegram.bot.TelegramBotMode;
 import com.khalibre.keycloak.provider.telegram.bot.TelegramUpdateHandler;
 import com.khalibre.keycloak.provider.telegram.bot.TelegramWebhookPayload;
+import com.khalibre.keycloak.provider.util.FederatedIdentity;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.GET;
 import jakarta.ws.rs.POST;
@@ -24,11 +25,8 @@ import java.util.HashMap;
 import java.util.Map;
 import org.keycloak.broker.oidc.OAuth2IdentityProviderConfig;
 import org.keycloak.forms.login.LoginFormsProvider;
-import org.keycloak.models.FederatedIdentityModel;
 import org.keycloak.models.IdentityProviderModel;
 import org.keycloak.models.KeycloakSession;
-import org.keycloak.models.RealmModel;
-import org.keycloak.models.UserModel;
 import org.keycloak.services.managers.AuthenticationSessionManager;
 import org.keycloak.services.resource.RealmResourceProvider;
 import org.keycloak.sessions.RootAuthenticationSessionModel;
@@ -284,14 +282,8 @@ public class TelegramAuthResource implements RealmResourceProvider {
       return false;
     }
 
-    RealmModel realm = session.getContext().getRealm();
-    FederatedIdentityModel socialLink = new FederatedIdentityModel(
-      alias,
-      state.getTelegramUserId(),
-      null
-    );
-    UserModel user = session.users().getUserByFederatedIdentity(realm, socialLink);
-    return user != null;
+    return FederatedIdentity.isTelegramChatLinked(session,
+      session.getContext().getRealm(), alias, state.getTelegramUserId());
   }
 
   @Override

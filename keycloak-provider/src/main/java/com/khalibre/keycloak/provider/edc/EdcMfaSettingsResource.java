@@ -1,5 +1,6 @@
 package com.khalibre.keycloak.provider.edc;
 
+import com.khalibre.keycloak.provider.util.FederatedIdentity;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -19,7 +20,6 @@ import jakarta.ws.rs.core.UriInfo;
 
 import org.jboss.logging.Logger;
 import org.keycloak.broker.oidc.OAuth2IdentityProviderConfig;
-import org.keycloak.models.FederatedIdentityModel;
 import org.keycloak.models.IdentityProviderModel;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.RealmModel;
@@ -488,9 +488,8 @@ log.infof("method=telegramScan user=%s scanKey=%s stateId=%s message=Expired",
         state.getTelegramUserId());
 
     boolean linkedToSomeoneElse = state.getTelegramUserId() != null
-        && session.users().getUserByFederatedIdentity(realm,
-            new FederatedIdentityModel(EdcChannelDetector.TELEGRAM_IDP_ALIAS,
-                state.getTelegramUserId(), null)) != null;
+        && FederatedIdentity.isTelegramChatLinked(session, realm,
+            EdcChannelDetector.TELEGRAM_IDP_ALIAS, state.getTelegramUserId());
     if (!linkedToSomeoneElse && !state.isPhoneNumberRequested()) {
       askBotForPhoneNumber(user, state);
     }
