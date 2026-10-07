@@ -375,6 +375,80 @@ The cheap manual substitute is a sign-in for each of the three channels plus the
 individual rules above. `hasNoUsableChannel` and `withdrawUndeliverableTelegram` are static methods
 over a plain `Map`, so they can be exercised from a scratch main class in seconds if that is wanted.
 
+## The account console
+
+The account console is a separate Maven/npm module (`khalibre-account-ui`) building a theme JAR, not
+the login theme. It has its own PatternFly version, its own translations, and its own class of
+mistakes.
+
+* **`@patternfly/react-core` here is v5, while the login theme renders on PatternFly v4 and v3.** So
+  the modal parts are `ModalBoxHeader`/`ModalBoxBody`/`ModalBoxFooter` and there is no `ModalBody`.
+  `NumberInput` exists but is a *quantity stepper*, not a segmented code field — use `TextInput` with
+  `inputMode="numeric"` for a fixed-length code. `ClipboardCopyButton` has no `value`: it copies from
+  the element whose id you pass as `textId`, so the text has to be rendered as its own element.
+* **`Page` comes from `@keycloak/keycloak-account-ui`, not from PatternFly.** The PatternFly one has
+  no `description` prop, and the account one is what `AccountActivities.tsx` uses.
+* **`parent=keycloak.v3` does not exist in the server image.** No `keycloak.v3` directory and no jar
+  containing one, so nothing is inherited: `signingIn` and `signingInDescription` resolved to their
+  raw keys, and any key not written into this module's `messages_en.properties` renders as the key
+  itself. Define messages locally rather than assuming the parent supplies them.
+* **Translations live in `maven-resources/theme/khalibre-account/account/messages/`.** A message
+  containing markup needs `<Trans components={{ strong: <strong /> }} />`, **not** `t()`. This was
+  got wrong here before: `i18n.ts` sets `escapeValue: false`, and that looks like it should make
+  `<strong>` in a message render as markup. It does not. That flag governs how i18next escapes
+  *interpolated variables*, not the returned string — `t()` returns a plain string, React escapes it,
+  and the tag reaches the page as visible text. `<Trans>` is what maps the tag to an element, and it
+  is what upstream's own `SigningIn.tsx` used.
+* **Beware i18next plural keys.** Passing an option named `count` makes i18next look for
+  `_one`/`_other` variants and fall back to the base key; `{{count}}` alone will not interpolate.
+  The backup-code count therefore uses `{{n}}`.
+* **The QR library is `qrcode`, dynamically imported** so it lands in the page's own lazy chunk
+  rather than the main bundle. It is not vendored from the login theme's
+  `qr-code-styling-1.9.2.js`, which is a separate copy for the FreeMarker pages.
+
+### Authenticating an account-console endpoint
+
+`AccountConsoleCaller.resolve` is the single gate, shared by the account-activities endpoint and the
+MFA settings one. Two checks, and **the service-account check is not redundant**:
+
+* **A `client_credentials` token in this realm already carries `aud: account`.** That was measured,
+  not assumed. So the audience check passes for it and only
+  `getServiceAccountClientLink() != null` rejects it. Removing that line would hand every service
+  account in the realm a user's MFA settings.
+* **The user is always the token's subject, never a request parameter.** An admin endpoint takes
+  `?username=`; these cannot, or one user could read another's channels.
+
+A **master-realm token is refused**, as everywhere: a provider mounted on `EDC` validates against
+`EDC`'s keys. So these endpoints cannot be tested with the master admin, and — since every account
+here is LDAP-federated and creating one is not safe — the happy path needs a real user's browser
+session. What can be checked without credentials: the provider is registered (`401` on a real path
+against `404` on an unknown one), and a temporary client with a service account is enough to confirm
+both rejection branches. Temporary *clients* are safe to create and delete.
+
+### A Telegram scan cannot be keyed the same way in both places
+
+`TelegramAuthResource` files its `AuthState` under the root authentication session id. **A plain REST
+request has none** — see the platform notes above — so that key is `null` there and
+`singleUseObjects().get(null)` throws. The account console therefore keys its scan on
+`"edc-mfa-settings:scan:" + user.getId()`, which is equally unforgeable because the id comes from the
+verified token. The two flows do not see each other's scans.
+
+`EdcTelegramLink` holds the write and the one-account-one-chat rule, so the enrolment wizard and the
+account console cannot disagree about it. `AuthStateSession`'s `singleUseObjects().put` takes a
+`Map<String, String>`, not a map of objects.
+
+### The Email/Telegram coupling
+
+Email and Telegram share one `spass` token. `EdcChannelDetector` reports Email as on whenever a
+`spass` token exists, and the bot can only send a PIN for a token that exists — so:
+
+* Removing Email deletes the `spass` token, which silently also withdraws Telegram
+  (`withdrawUndeliverableTelegram`). The account console confirms this and reports
+  `willNeedEnrolment`.
+* Email cannot be offered to someone who already has Telegram, because there is nothing to switch on.
+* Giving each channel its own token is the only real fix, and privacyIDEA does allow several tokens
+  per user. Not done.
+
 ## The enrolled-users group
 
 `EdcEnrolmentState.markComplete()` adds the user to the realm's MFA group, and `clear()` takes them
@@ -406,8 +480,13 @@ from the marker.
   explanation. Verified against all nine realm users: six come back `enrolmentRequired=true`.
 * **The check deliberately includes backup codes.** A user holding only unused TANs can still get in,
   so they must not be pushed back into enrolment.
-* **This is presentation only. Sign-in is not yet blocked** - the flow still completes once a code is
-  accepted, and there is no self-service enrolment yet. `isUserSetupAllowed()` still returns `false`.
+* **Sign-in *is* blocked now, by the wizard rather than by this gate.** `edc-mfa-enrolment` is a
+  registered required action that `edc-mfa-channels` puts on the user, and a pending required action
+  stops Keycloak finishing the sign-in, so the OTP gate no longer has to. What is still only
+  presentation is the OTP *page's* own behaviour - it explains rather than redirects, because the
+  action runs after the browser flow, not during it. `isUserSetupAllowed()` still returns `false`; that
+  governs whether an *authenticator* can be set up from the admin console and is unrelated to the
+  wizard, which is a `RequiredActionProvider`.
 * **Service identities are caught too.** `ldap-svc` has no tokens and comes back
   `enrolmentRequired=true`. Any non-human account that signs in through this flow will be stopped until
   someone gives it a channel, so exempt them deliberately rather than discovering it in PROD.

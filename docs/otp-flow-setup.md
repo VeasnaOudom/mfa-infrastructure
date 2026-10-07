@@ -375,6 +375,46 @@ Note that deleting a privacyIDEA token is enough on its own: with no `spass` tok
 nothing to send, so the Telegram channel is withdrawn even though the link survives, and enrolment
 is owed again. That is deliberate, because a bare `telegram-user-id` is an address, not a channel.
 
+### Managing your own channels (account console)
+
+The **Signing in** page of the account console lets a user turn each channel on and off themselves.
+It is backed by a separate provider mounted at `/realms/EDC/edc-mfa-settings/`, which acts **only on
+the caller's own account** — the user comes from a verified `account`-client bearer token and is never
+read from a parameter, so unlike the ICT endpoint above it cannot be pointed at another account.
+
+The caller is authenticated by `AccountConsoleCaller`, shared with the account-activities endpoint so
+the two cannot drift on who is allowed in:
+
+* The token must be issued for the `account` client.
+* **Service accounts are refused.** Worth knowing when testing: a `client_credentials` token in this
+  realm carries `aud: account` anyway, so the audience check passes and the service-account check is
+  the only thing standing between it and a user's MFA setup. A master-realm token is refused too —
+  a provider mounted on `EDC` validates against `EDC`'s keys.
+
+| Call | Does |
+| --- | --- |
+| `GET  /edc-mfa-settings/channels` | State of all four channels, what could be added, whether privacyIDEA is reachable |
+| `POST /edc-mfa-settings/channels/{id}/start` | Begins one: returns an `otpauth://` URI, sends an email code, or mints a Telegram deeplink |
+| `POST /edc-mfa-settings/channels/{id}/verify` | `{"code":"…"}` finishes it; Telegram takes none |
+| `GET  /edc-mfa-settings/channels/telegram/scan` | Polls a Telegram scan and asks the bot for a phone number |
+| `POST /edc-mfa-settings/channels/{id}/remove` | Turns one off |
+| `POST /edc-mfa-settings/channels/backupCode/regenerate` | Issues a fresh set of backup codes, returning them once |
+
+Three things about it that are not obvious:
+
+* **Telegram linking here cannot reuse `telegram-auth`.** Those endpoints file their `AuthState`
+  under the root authentication session, which is `null` on a plain REST request, so the account
+  console has to key its scan on the user id instead. That is equally unforgeable — the id comes from
+  the verified token — but it is a different key, so a scan started in one flow is invisible to the
+  other.
+* **Email and Telegram share one `spass` token.** Email reads as on whenever a `spass` token exists,
+  so turning Email off deletes the only thing the bot can send a code through and Telegram goes quiet
+  too. The response reports `willNeedEnrolment` and the page confirms it, but the coupling is real
+  and fixing it means giving each channel its own token.
+* **Backup codes cannot be re-read.** `regenerate` deletes the old `tan` token before creating the new
+  one — creating first would leave the previous set working — and returns the codes in that response
+  and nowhere else.
+
 ### Resetting a user's MFA (ICT)
 
 ```
@@ -570,9 +610,17 @@ gets in the way in ways worth writing down:
   (`vault_privacyidea_webhook_secret`) exists.
 * Admin-config values live in the Keycloak database, so a database restored from another environment
   carries that environment's `webhookSecret` and `publicBaseUrl` with no warning.
-* The account console has no **Signing in** page yet, so there is nowhere to regenerate a backup-code
-  set from. Enrolment covers the first set only.
+* The account console **Signing in** page now manages channels (see above), so a lost backup-code set
+  can be replaced without ICT. What it does **not** do is require a password re-check first: a stolen
+  console session can still strip MFA and mint a new set of backup codes. Adding one is the next thing
+  this page needs.
+* Email and Telegram share a single `spass` token, so the two channels cannot be switched on and off
+  independently. Turning Email off also stops Telegram codes arriving.
 * MFA enrolment has been driven end to end for the `extuser` AD account (chooser → authenticator app
   → wrong code → correct code → backup codes → completion marker). The **Telegram** and **email**
   branches have not: Telegram needs a real bot chat, and the email branch needs a mailbox at
   smtp4dev.
+* The account console has been verified only as far as **authentication**: a service-account token and
+  a master-realm token are both refused, and the provider is registered. The page itself needs a real
+  user's browser session to confirm, because every account on this realm is LDAP-federated and
+  creating one is not safe.
