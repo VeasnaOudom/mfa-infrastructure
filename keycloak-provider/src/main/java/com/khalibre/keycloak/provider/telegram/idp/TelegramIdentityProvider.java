@@ -26,6 +26,7 @@ import org.keycloak.broker.provider.AbstractIdentityProvider;
 import org.keycloak.broker.provider.AuthenticationRequest;
 import org.keycloak.broker.provider.BrokeredIdentityContext;
 import org.keycloak.broker.provider.IdentityBrokerException;
+import org.keycloak.broker.social.SocialIdentityProvider;
 import org.keycloak.events.Errors;
 import org.keycloak.events.EventBuilder;
 import org.keycloak.events.EventType;
@@ -41,7 +42,8 @@ import org.keycloak.sessions.RootAuthenticationSessionModel;
 import org.keycloak.utils.StringUtil;
 
 public class TelegramIdentityProvider extends
-  AbstractIdentityProvider<OAuth2IdentityProviderConfig> {
+  AbstractIdentityProvider<OAuth2IdentityProviderConfig> implements
+  SocialIdentityProvider<OAuth2IdentityProviderConfig> {
 
   private static final Logger log = Logger.getLogger(TelegramIdentityProvider.class);
 
