@@ -2,7 +2,7 @@ package com.khalibre.keycloak.provider.telegram.idp;
 
 import static com.khalibre.keycloak.provider.telegram.idp.TelegramIdentityProviderFactory.AUTO_LINK_BY_PHONE_NUMBER_KEY;
 
-import com.khalibre.keycloak.provider.telegram.bot.TelegramBotClient;
+import com.khalibre.keycloak.provider.telegram.bot.TelegramNotifier;
 import com.khalibre.keycloak.provider.telegram.state.AuthState;
 import com.khalibre.keycloak.provider.telegram.state.AuthStateSession;
 import com.khalibre.keycloak.provider.edc.EdcChannelDetector;
@@ -247,16 +247,9 @@ public class TelegramIdentityProvider extends
     }
 
     private void sendToTelegram(AuthState auth, String messageKey) {
-      if (auth == null) {
-        return;
-      }
-      String tgUserId = auth.getTelegramUserId();
-      String botToken = provider.getBotToken();
-      if (tgUserId != null && botToken != null) {
-        LoginFormsProvider formProvider = session.getProvider(LoginFormsProvider.class);
-        String message = formProvider.getMessage(messageKey);
-        new TelegramBotClient(botToken).sendMessage(tgUserId, message, null);
-      }
+      // Delegated rather than kept here: the MFA link path needs the same lookup-and-send, and two
+      // copies of a bot-token lookup is two places for a masked token to be handled differently.
+      TelegramNotifier.send(session, auth == null ? null : auth.getTelegramUserId(), messageKey);
     }
 
     private boolean isAccountLinked(String alias, AuthState state) {

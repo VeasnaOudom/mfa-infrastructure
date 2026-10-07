@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.khalibre.keycloak.provider.edc.EdcChallengeToken;
 import com.khalibre.keycloak.provider.edc.EdcChannelDetector;
+import com.khalibre.keycloak.provider.edc.EdcTelegramLink;
 import com.khalibre.keycloak.provider.edc.EdcMfaChannelsAuthenticator;
 import com.khalibre.keycloak.provider.edc.EdcOtpDelivery;
 import com.khalibre.keycloak.provider.privacyIdea.service.PrivacyIdeaService;
@@ -21,7 +22,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.jboss.logging.Logger;
-import org.keycloak.models.FederatedIdentityModel;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.RealmModel;
 import org.keycloak.models.UserModel;
@@ -307,56 +307,19 @@ public class PrivacyIdeaWebhookResource implements RealmResourceProvider {
     }
 
     AuthState state = AuthStateSession.get(session, rootSession.getId());
-    if (state == null || state.getTelegramUserId() == null) {
+    if (state == null) {
       return Response.status(Response.Status.NOT_FOUND)
           .entity(Map.of("error", "No Telegram scan in progress")).build();
     }
-    if (state.isExpired()) {
-      AuthStateSession.remove(session, rootSession.getId());
-      return Response.status(Response.Status.GONE)
-          .entity(Map.of("error", "Telegram code expired")).build();
-    }
-    if (!"COMPLETED".equals(state.getStatus())) {
-      return Response.status(Response.Status.CONFLICT)
-          .entity(Map.of("error", "Telegram scan not finished yet", "status", state.getStatus()))
-          .build();
-    }
 
-    String alias = EdcChannelDetector.TELEGRAM_IDP_ALIAS;
-    String chatId = state.getTelegramUserId();
-
-    // A Telegram account may only ever belong to one Keycloak user, or codes would be delivered to
-    // the wrong person. Checked before writing, not after - and against the user attribute as well
-    // as the federated identity, because that row does not reliably survive on this realm's
-    // LDAP-backed users while the attribute does. Checking the row alone let a second account
-    // claim a chat that was already in use.
-    UserModel owner = session.users().getUserByFederatedIdentity(realm,
-        new FederatedIdentityModel(alias, chatId, null));
-    if (owner == null) {
-      owner = EdcChannelDetector.anotherUserHolding(session, realm, user, chatId);
+    EdcTelegramLink.Outcome outcome = EdcTelegramLink.apply(session, realm, user, state);
+    if (outcome != EdcTelegramLink.Outcome.LINKED) {
+      if (outcome == EdcTelegramLink.Outcome.EXPIRED) {
+        AuthStateSession.remove(session, rootSession.getId());
+      }
+      return Response.status(EdcTelegramLink.statusOf(outcome))
+          .entity(EdcTelegramLink.problem(outcome)).build();
     }
-    if (owner != null && !owner.getId().equals(user.getId())) {
-      log.warnf("method=linkTelegram status=CONFLICT username=%s chat=%s alsoHeldBy=%s "
-          + "message=TelegramAlreadyLinked", user.getUsername(), chatId, owner.getUsername());
-      return Response.status(Response.Status.CONFLICT)
-          .entity(Map.of("error", "That Telegram account is already linked to another user"))
-          .build();
-    }
-
-    if (session.users().getFederatedIdentity(realm, user, alias) == null) {
-      session.users().addFederatedIdentity(realm, user,
-          new FederatedIdentityModel(alias, chatId, state.getUsername()));
-    } else {
-      session.users().updateFederatedIdentity(realm, user,
-          new FederatedIdentityModel(alias, chatId, state.getUsername()));
-    }
-
-    // Written the way the brokered-identity flow writes them: in process, because LDAP federation
-    // drops attributes pushed through the admin API.
-    user.setSingleAttribute(EdcChannelDetector.TELEGRAM_USER_ID_ATTR, chatId);
-    user.setSingleAttribute(EdcChannelDetector.TELEGRAM_USERNAME_ATTR, state.getUsername());
-    user.setSingleAttribute(EdcChannelDetector.TELEGRAM_FIRST_NAME_ATTR, state.getFirstName());
-    user.setSingleAttribute(EdcChannelDetector.TELEGRAM_LAST_NAME_ATTR, state.getLastName());
 
     // Single use: a second enrolment attempt must start from a fresh scan.
     AuthStateSession.remove(session, rootSession.getId());

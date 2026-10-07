@@ -1,0 +1,240 @@
+.section {
+  padding-bottom: var(--space-size-md);
+}
+
+/*
+ * The design's channel card: a bordered white panel holding a title, a status pill, a line of
+ * detail, and the actions on the right. `auto` rather than a fixed height so a wrapped detail line
+ * does not collide with the buttons.
+ */
+.card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-size-md);
+  flex-wrap: wrap;
+  background-color: var(--edc-card);
+  border: 1px solid var(--edc-border);
+  border-radius: 0.5rem;
+  padding: 1.25rem 1.5rem;
+  margin-top: var(--space-size-md);
+}
+
+.cardBody {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.cardText {
+  min-width: 0;
+}
+
+.cardTitle {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-weight: 700;
+  font-size: 1.05rem;
+  color: var(--edc-ink);
+}
+
+.cardDetail {
+  margin-top: 0.25rem;
+  color: var(--text-gray);
+  font-size: 0.95rem;
+}
+
+.cardActions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-shrink: 0;
+}
+
+/* Outlined pill, matching the design's "Active" marker. */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--edc-green-border);
+  border-radius: 999px;
+  padding: 0.05rem 0.6rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--edc-green);
+  background-color: var(--edc-card);
+}
+
+.pillOff {
+  border-color: var(--border-sidebar);
+  color: var(--text-gray);
+}
+
+.callout {
+  display: flex;
+  gap: 0.75rem;
+  background-color: var(--edc-navy-soft);
+  border-left: 3px solid var(--edc-navy);
+  border-radius: 0.25rem;
+  padding: 1rem 1.25rem;
+  margin-top: var(--space-size-md);
+  color: var(--edc-ink);
+  line-height: 1.5;
+}
+
+.calloutIcon {
+  flex-shrink: 0;
+  color: var(--edc-navy);
+  margin-top: 0.1rem;
+}
+
+/* "Add another channel" rows. */
+.addRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-size-md);
+  background-color: var(--edc-card);
+  border: 1px solid var(--edc-border);
+  border-radius: 0.5rem;
+  padding: 1rem 1.25rem;
+  margin-top: var(--space-size-md);
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+}
+
+.addRow:hover:not(:disabled) {
+  background-color: var(--edc-bg-hover);
+}
+
+.addRow:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.addIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 0.5rem;
+  background-color: var(--edc-navy-soft);
+  color: var(--edc-navy);
+  flex-shrink: 0;
+}
+
+.addText {
+  flex: 1;
+  min-width: 0;
+}
+
+.addTitle {
+  font-weight: 700;
+  color: var(--edc-ink);
+}
+
+.addDetail {
+  margin-top: 0.15rem;
+  color: var(--text-gray);
+  font-size: 0.95rem;
+}
+
+.emptyRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-size-md);
+  background-color: var(--edc-card);
+  border: 1px solid var(--edc-border);
+  border-radius: 0.5rem;
+  padding: 1rem 1.25rem;
+  margin-top: var(--space-size-md);
+}
+
+.emptyIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 0.5rem;
+  background-color: var(--edc-navy-soft);
+  color: var(--edc-navy);
+  flex-shrink: 0;
+}
+
+.formPanel {
+  background-color: var(--edc-card);
+  border: 1px solid var(--edc-border);
+  border-radius: 0.5rem;
+  padding: 1.5rem;
+  margin-top: var(--space-size-md);
+}
+
+.formRow {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-size-md);
+  margin-top: var(--space-size-md);
+  flex-wrap: wrap;
+}
+
+.qr {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 1rem 0;
+  min-height: 208px;
+}
+
+/* The vendored library emits an inline <svg> at its own requested size; only the rounded corners
+   are ours to add. */
+.qr svg {
+  border-radius: 0.35rem;
+  display: block;
+}
+
+.setupKey {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  background-color: var(--edc-bg);
+  border: 1px solid var(--edc-border);
+  border-radius: 0.25rem;
+  padding: 0.35rem 0.6rem;
+  word-break: break-all;
+}
+
+.codes {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(7rem, 1fr));
+  gap: 0.5rem;
+  margin: var(--space-size-md) 0;
+}
+
+.code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 1.05rem;
+  letter-spacing: 0.08em;
+  background-color: var(--edc-bg);
+  border: 1px solid var(--edc-border);
+  border-radius: 0.25rem;
+  padding: 0.4rem 0.5rem;
+  text-align: center;
+}
+
+.deeplink {
+  display: inline-block;
+  margin-top: var(--space-size-md);
+}
+
+/* Wider on small screens, where the card's actions wrap under the text anyway. */
+@media (max-width: 768px) {
+  .card {
+    align-items: flex-start;
+  }
+
+  .cardActions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+}
