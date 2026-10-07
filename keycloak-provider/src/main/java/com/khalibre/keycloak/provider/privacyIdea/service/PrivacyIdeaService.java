@@ -48,6 +48,43 @@ public class PrivacyIdeaService {
    */
   public List<String> getActiveTokenSerials(String username, String type, String adminToken)
       throws Exception {
+    List<String> serials = new ArrayList<>();
+    for (TokenInfo token : getActiveTokens(username, type, adminToken)) {
+      serials.add(token.serial());
+    }
+    return serials;
+  }
+
+  /**
+   * One privacyIDEA token, as far as this integration cares about it.
+   *
+   * @param serial the token serial, as it appears in {@code PISP…}/{@code TOTP…}/{@code PITN…}
+   * @param type privacyIDEA's own type name, which is how it is filtered and deleted
+   * @param since when the token was enrolled, or {@code null} when privacyIDEA did not say. Used to
+   *     show "added 12 August 2026" on the account page
+   * @param count number of unused codes, only reported by privacyIDEA for a TAN token. {@code null}
+   *     means "not reported", which the account page renders as no count rather than as zero - a
+   *     TAN token out of codes goes inactive on its own, so zero here would be misleading anyway
+   */
+  public record TokenInfo(String serial, String type, Instant since, Integer count) {
+  }
+
+  /**
+   * The user's active tokens of one type, with the metadata the account page needs.
+   *
+   * <p>Separate from {@link #getActiveTokenSerials} rather than replacing it: the sign-in path only
+   * ever needs to know whether a token exists, and asking for the whole token document on every
+   * login for a field two screens away is a round trip spent for nothing.
+   *
+   * <p>privacyIDEA reports enrolment time as an epoch <em>milliseconds</em> value on the token
+   * document, which is not documented as such and has been seen as seconds elsewhere in the same API
+   * surface. A value small enough to be seconds is promoted, because the alternative is a date in
+   * January 1970 shown to the user as when they set up their authenticator app.
+   *
+   * @return active tokens of that type, empty when the user has none
+   */
+  public List<TokenInfo> getActiveTokens(String username, String type, String adminToken)
+      throws Exception {
     String endpoint = String.format("%s/token/?user=%s&type=%s", baseUrl,
         URLEncoder.encode(username, StandardCharsets.UTF_8),
         URLEncoder.encode(type, StandardCharsets.UTF_8));
@@ -60,22 +97,58 @@ public class PrivacyIdeaService {
 
     HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
     if (response.statusCode() != HttpStatus.SC_OK) {
-      log.warnf("method=getActiveTokenSerials user=%s type=%s httpStatus=%d", username, type,
+      log.warnf("method=getActiveTokens user=%s type=%s httpStatus=%d", username, type,
           response.statusCode());
       return List.of();
     }
 
-    List<String> serials = new ArrayList<>();
+    List<TokenInfo> tokens = new ArrayList<>();
     for (JsonNode token : objectMapper.readTree(response.body())
         .path("result").path("value").path("tokens")) {
-      if (token.path("active").asBoolean(false) && !token.path("revoked").asBoolean(false)) {
-        String serial = token.path("serial").asText(null);
-        if (serial != null && !serial.isBlank()) {
-          serials.add(serial);
+      if (!token.path("active").asBoolean(false) || token.path("revoked").asBoolean(false)) {
+        continue;
+      }
+      String serial = token.path("serial").asText(null);
+      if (serial == null || serial.isBlank()) {
+        continue;
+      }
+      String tokenType = token.path("tokentype").asText(type);
+      Integer count = token.hasNonNull("count") && token.path("count").canConvertToInt()
+          ? token.path("count").asInt()
+          : null;
+      tokens.add(new TokenInfo(serial, tokenType, readEnrolledAt(token), count));
+    }
+    return tokens;
+  }
+
+  /**
+   * When a token was enrolled, from whichever field privacyIDEA put it in.
+   *
+   * <p>Returns {@code null} rather than an epoch instant when nothing usable is present, so a caller
+   * can leave the date out of the page instead of printing 1 January 1970.
+   */
+  private static Instant readEnrolledAt(JsonNode token) {
+    for (String field : new String[] { "created", "timestamp", "enrolled" }) {
+      JsonNode node = token.path(field);
+      if (node.isMissingNode() || node.isNull()) {
+        continue;
+      }
+      if (node.isNumber()) {
+        long raw = node.asLong();
+        // Anything below this is seconds rather than milliseconds: no enrolment happened in 1970.
+        long millis = raw > 0 && raw < 100_000_000_000L ? raw * 1000L : raw;
+        if (millis > 0) {
+          return Instant.ofEpochMilli(millis);
+        }
+      } else if (node.isTextual()) {
+        try {
+          return Instant.parse(node.asText());
+        } catch (Exception ignored) {
+          // Not an ISO-8601 instant. Try the next field rather than failing the whole read.
         }
       }
     }
-    return serials;
+    return null;
   }
 
   public String getSpassTokenSerial(String username, String adminToken) throws Exception {

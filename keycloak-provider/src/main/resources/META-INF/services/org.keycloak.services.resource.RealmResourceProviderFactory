@@ -1,3 +1,5 @@
 com.khalibre.keycloak.provider.telegram.rest.TelegramAuthResourceFactory
 com.khalibre.keycloak.provider.account.AccountActivitiesResourceFactory
 com.khalibre.keycloak.provider.privacyIdea.PrivacyIdeaWebhookResourceFactory
+com.khalibre.keycloak.provider.edc.EdcMfaSettingsResourceFactory
+com.khalibre.keycloak.provider.edc.EdcMfaAdminResourceFactory

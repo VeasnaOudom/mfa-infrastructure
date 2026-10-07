@@ -9,13 +9,18 @@ import {
   Oid4Vci,
   PersonalInfo,
   Resources,
-  SigningIn,
 } from "@keycloak/keycloak-account-ui";
 import { lazy } from "react";
 
 // Lazy so the react-table chunk is only downloaded when the page is opened.
 const AccountActivities = lazy(() =>
   import("./pages/AccountActivities.tsx").then((m) => ({ default: m.AccountActivities })),
+);
+
+// The MFA channel management page. Also lazy, and separately, so the QR library it pulls in is not
+// on the critical path for every account console page.
+const MfaChannels = lazy(() =>
+  import("./pages/MfaChannels.tsx").then((m) => ({ default: m.MfaChannels })),
 );
 
 export const AccountActivitiesRoute: RouteObject = {
@@ -35,7 +40,7 @@ export const LinkedAccountsRoute: RouteObject = {
 
 export const SigningInRoute: RouteObject = {
   path: "account-security/signing-in",
-  element: <SigningIn />,
+  element: <MfaChannels />,
 };
 
 export const ApplicationsRoute: RouteObject = {

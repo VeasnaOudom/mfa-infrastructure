@@ -1,53 +1,44 @@
 package com.khalibre.keycloak.provider.telegram.state;
 
-import java.util.HashMap;
-import java.util.Map;
 import org.keycloak.models.KeycloakSession;
 
+/**
+ * Associates a caller with the scan it started.
+ *
+ * <p>Two callers exist and they key differently, which is the whole point of this class:
+ *
+ * <ul>
+ * <li><b>The login flow</b> keys on the root authentication session id, because a browser mid-sign-in
+ * has exactly one.
+ * <li><b>The account console</b> keys on the user id. A plain REST request has <em>no</em>
+ * authentication session at all - Keycloak only populates one for login-action requests - so there
+ * would be nothing to key on there. The user id comes from the verified bearer token and is just as
+ * unforgeable.
+ * </li>
+ * </ul>
+ *
+ * <p>The mapping lives in {@link AuthStateCache}, in-process. That was not a free choice: it was
+ * reading and writing {@code session.singleUseObjects()} instead, and a key written by one request
+ * was not there for the next one to read - the account console's Telegram scan reported "no scan in
+ * progress" seconds after starting one. See the note on {@link AuthStateCache#putKeyed}.
+ *
+ * <p>{@code session} is retained on every method even though nothing uses it, so the three existing
+ * call sites read the same as before. Dropping it would be tidier and would touch unrelated files for
+ * no behaviour change.
+ */
 public class AuthStateSession extends AuthStateCache {
-
-  private static final String KEY_AUTH_STATE_ID = "authStateId";
 
   public static AuthState create(KeycloakSession session, String sessionId) {
     AuthState authState = createEmpty();
-    setAuthStateId(session, sessionId, authState.getId());
+    putKeyed(sessionId, authState.getId());
     return authState;
   }
 
   public static AuthState get(KeycloakSession session, String sessionId) {
-    return get(getAuthStateId(session, sessionId));
+    return getKeyed(sessionId);
   }
 
   public static void remove(KeycloakSession session, String sessionId) {
-    remove(getAuthStateId(session, sessionId));
-  }
-
-  private static String getAuthStateId(KeycloakSession session, String sessionId) {
-    // Null here is normal, not exceptional: a plain REST request has no root authentication session,
-    // so there is no session id to look the state up by. singleUseObjects().get(null) throws rather
-    // than returning nothing, so guard it and let the caller see a missing state - which is what
-    // /status already reports as EXPIRED.
-    if (session == null || sessionId == null || sessionId.isBlank()) {
-      return null;
-    }
-    Map<String, String> notes = session.singleUseObjects().get(sessionId);
-    if (notes != null) {
-      return notes.get(KEY_AUTH_STATE_ID);
-    }
-    return null;
-  }
-
-  private static void setAuthStateId(KeycloakSession session, String sessionId, String id) {
-    if (session == null || sessionId == null || sessionId.isBlank()) {
-      return;
-    }
-    Map<String, String> notes = session.singleUseObjects().get(sessionId);
-    if (notes == null) {
-      notes = new HashMap<>();
-    } else {
-      notes = new HashMap<>(notes);
-    }
-    notes.put(KEY_AUTH_STATE_ID, id);
-    session.singleUseObjects().put(sessionId, AuthState.LIFESPAN_SECONDS + 60, notes);
+    removeKeyed(sessionId);
   }
 }

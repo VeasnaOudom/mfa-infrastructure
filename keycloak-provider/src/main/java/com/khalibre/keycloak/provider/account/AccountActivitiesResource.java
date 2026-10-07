@@ -28,9 +28,6 @@ import org.keycloak.models.Constants;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.RealmModel;
 import org.keycloak.models.UserModel;
-import org.keycloak.representations.AccessToken;
-import org.keycloak.services.managers.AppAuthManager;
-import org.keycloak.services.managers.AuthenticationManager;
 import org.keycloak.services.resource.RealmResourceProvider;
 
 /**
@@ -61,12 +58,6 @@ public class AccountActivitiesResource implements RealmResourceProvider {
 
   private final KeycloakSession session;
 
-  @Context
-  private UriInfo uriInfo;
-
-  @Context
-  private HttpHeaders headers;
-
   public AccountActivitiesResource(KeycloakSession session) {
     this.session = session;
   }
@@ -81,6 +72,7 @@ public class AccountActivitiesResource implements RealmResourceProvider {
       @QueryParam("dateFrom") String dateFrom,
       @QueryParam("dateTo") String dateTo,
       @QueryParam("ipAddress") String ipAddress,
+      @Context UriInfo uriInfo,
       @Context HttpHeaders headers) {
     RealmModel realm = session.getContext().getRealm();
     ClientModel accountClient = realm.getClientByClientId(Constants.ACCOUNT_MANAGEMENT_CLIENT_ID);
@@ -88,7 +80,7 @@ public class AccountActivitiesResource implements RealmResourceProvider {
       return Response.status(Response.Status.NOT_FOUND).build();
     }
 
-    UserModel user = authenticate(accountClient, headers);
+    UserModel user = AccountConsoleCaller.resolve(session, uriInfo, headers);
     if (user == null) {
       throw new NotAuthorizedException("Bearer token required");
     }
@@ -171,42 +163,6 @@ public class AccountActivitiesResource implements RealmResourceProvider {
       }
     }
     return parsed.toArray(new EventType[0]);
-  }
-
-  /**
-   * Verifies the bearer token and resolves the user it belongs to.
-   *
-   * @return the authenticated user, or {@code null} if the token is missing, not valid, not
-   *     issued for the account client, or belongs to a service account.
-   */
-  private UserModel authenticate(ClientModel accountClient, HttpHeaders headers) {
-    String tokenString = AppAuthManager.extractAuthorizationHeaderTokenOrReturnNull(headers);
-    if (tokenString == null) {
-      return null;
-    }
-
-    AuthenticationManager.AuthResult authResult =
-        new AppAuthManager.BearerTokenAuthenticator(session)
-            .setUriInfo(uriInfo)
-            .setHeaders(headers)
-            .setConnection(session.getContext().getConnection())
-            .setTokenString(tokenString)
-            .authenticate();
-
-    if (authResult == null || authResult.getUser() == null) {
-      return null;
-    }
-
-    AccessToken accessToken = authResult.getToken();
-    if (accessToken == null || !accessToken.hasAudience(accountClient.getClientId())) {
-      return null;
-    }
-
-    if (authResult.getUser().getServiceAccountClientLink() != null) {
-      return null;
-    }
-
-    return authResult.getUser();
   }
 
   private AccountActivity toAccountActivity(Event event) {
