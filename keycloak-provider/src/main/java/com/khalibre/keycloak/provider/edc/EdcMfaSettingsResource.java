@@ -19,6 +19,9 @@ import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.core.UriInfo;
 
 import org.jboss.logging.Logger;
+import org.keycloak.events.Event;
+import org.keycloak.events.EventStoreProvider;
+import org.keycloak.events.EventType;
 import org.keycloak.broker.oidc.OAuth2IdentityProviderConfig;
 import org.keycloak.models.IdentityProviderModel;
 import org.keycloak.models.KeycloakSession;
@@ -243,11 +246,34 @@ public class EdcMfaSettingsResource implements org.keycloak.services.resource.Re
 
     try {
       switch (channel) {
-        case CHANNEL_TELEGRAM -> result.put("removed", EdcTelegramLink.unlink(session, realm, user));
-        case CHANNEL_TOTP -> result.put("removed",
-            deleteTokens(user, List.of(TYPE_TOTP, TYPE_HOTP)));
-        case CHANNEL_EMAIL -> result.put("removed", deleteTokens(user, List.of(TYPE_SPASS)));
-        case CHANNEL_BACKUP_CODE -> result.put("removed", deleteTokens(user, List.of(TYPE_TAN)));
+        case CHANNEL_TELEGRAM -> {
+          boolean removed = EdcTelegramLink.unlink(session, realm, user);
+          result.put("removed", removed);
+          if (removed) {
+            emitChannelEvent(user, EventType.REMOVE_FEDERATED_IDENTITY, channel);
+          }
+        }
+        case CHANNEL_TOTP -> {
+          boolean removed = deleteTokens(user, List.of(TYPE_TOTP, TYPE_HOTP));
+          result.put("removed", removed);
+          if (removed) {
+            emitChannelEvent(user, EventType.REMOVE_TOTP, channel);
+          }
+        }
+        case CHANNEL_EMAIL -> {
+          boolean removed = deleteTokens(user, List.of(TYPE_SPASS));
+          result.put("removed", removed);
+          if (removed) {
+            emitChannelEvent(user, EventType.REMOVE_CREDENTIAL, channel);
+          }
+        }
+        case CHANNEL_BACKUP_CODE -> {
+          boolean removed = deleteTokens(user, List.of(TYPE_TAN));
+          result.put("removed", removed);
+          if (removed) {
+            emitChannelEvent(user, EventType.REMOVE_CREDENTIAL, channel);
+          }
+        }
         default -> {
           return Response.status(Response.Status.BAD_REQUEST)
               .entity(Map.of("error", "Unknown channel")).build();
@@ -422,6 +448,7 @@ public class EdcMfaSettingsResource implements org.keycloak.services.resource.Re
       }
 
       EdcEnrolmentState.markComplete(session, user, channel);
+      emitChannelEvent(user, addEventTypeFor(channel), channel);
       return json(Map.of("status", "ok", "channel", channel));
     } catch (Exception e) {
       log.errorf(e, "method=verify user=%s channel=%s", user.getUsername(), channel);
@@ -449,6 +476,7 @@ public class EdcMfaSettingsResource implements org.keycloak.services.resource.Re
     }
     AuthStateSession.remove(scanKey(user));
     EdcEnrolmentState.markComplete(session, user, CHANNEL_TELEGRAM);
+    emitChannelEvent(user, EventType.FEDERATED_IDENTITY_LINK, CHANNEL_TELEGRAM);
     return json(Map.of("status", "ok", "channel", CHANNEL_TELEGRAM));
   }
 
@@ -557,6 +585,7 @@ log.infof("method=telegramScan user=%s scanKey=%s stateId=%s message=Expired",
             "privacyIDEA issued no backup codes for " + user.getUsername());
       }
       EdcEnrolmentState.markComplete(session, user, CHANNEL_BACKUP_CODE);
+      emitChannelEvent(user, EventType.UPDATE_CREDENTIAL, CHANNEL_BACKUP_CODE);
       return json(Map.of("codes", token.otps(), "count", token.otps().size()));
     } catch (Exception e) {
       log.errorf(e, "method=regenerateBackupCodes user=%s", user.getUsername());
@@ -635,6 +664,37 @@ log.infof("method=telegramScan user=%s scanKey=%s stateId=%s message=Expired",
       throw new IllegalStateException("privacyIDEA refused the service account login");
     }
     return adminToken;
+  }
+
+  private EventType addEventTypeFor(String channel) {
+    return switch (channel) {
+      case CHANNEL_TOTP -> EventType.UPDATE_TOTP;
+      case CHANNEL_EMAIL -> EventType.UPDATE_EMAIL;
+      case CHANNEL_BACKUP_CODE -> EventType.UPDATE_CREDENTIAL;
+      case CHANNEL_TELEGRAM -> EventType.FEDERATED_IDENTITY_LINK;
+      default -> EventType.UPDATE_PROFILE;
+    };
+  }
+
+  private void emitChannelEvent(UserModel user, EventType type, String channel) {
+    EventStoreProvider store = session.getProvider(EventStoreProvider.class);
+    if (store == null) {
+      return;
+    }
+
+    Event event = new Event();
+    event.setType(type);
+    event.setRealmId(session.getContext().getRealm().getId());
+    event.setUserId(user.getId());
+    event.setIpAddress(clientIp());
+    event.setTime(System.currentTimeMillis());
+    if (session.getContext().getClient() != null) {
+      event.setClientId(session.getContext().getClient().getClientId());
+    }
+    event.setDetails(Map.of(
+        "auth_method", "account_console",
+        "mfa_channel", channel));
+    store.onEvent(event);
   }
 
   private boolean deleteTokens(UserModel user, List<String> types) throws Exception {
