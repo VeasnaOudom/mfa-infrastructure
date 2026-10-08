@@ -201,22 +201,18 @@ public class TelegramIdentityProvider extends
 
         String autoLinkUsername;
         String tgUserId = auth.getTelegramUserId();
+        boolean accountLinked = FederatedIdentity.isTelegramLinked(session,
+          provider.getConfig().getAlias(), tgUserId);
         if (isLinkMode) {
+          if (accountLinked) {
+            log.warnf("method=authenticate chat=%s message=TelegramAlreadyLinked", tgUserId);
+            return telegramRejected(sessionId, auth, "telegram.link-already-linked");
+          }
           UserModel authenticatedUser = findAuthenticatedUser(authSession);
           if (authenticatedUser == null
             || (isPhoneMatchRequired(authenticatedUser)
             && !isPhoneMatched(authenticatedUser, auth.getPhoneNumber()))) {
             return telegramRejected(sessionId, auth, "telegram.link-phone-mismatch");
-          }
-          // One Telegram account belongs to one person. Without this, scanning the same phone from a
-          // second account links it too, and both accounts then receive codes at the same chat.
-          UserModel otherHolder = EdcChannelDetector.anotherUserHolding(session, authenticatedUser,
-            tgUserId);
-          if (otherHolder != null) {
-            log.warnf("method=authenticate chat=%s targetUser=%s alreadyHeldBy=%s "
-                + "message=TelegramAlreadyLinked", tgUserId, authenticatedUser.getUsername(),
-                otherHolder.getUsername());
-            return telegramRejected(sessionId, auth, "telegram.link-already-linked");
           }
           autoLinkUsername = authenticatedUser.getUsername();
         } else {
@@ -224,13 +220,11 @@ public class TelegramIdentityProvider extends
         }
 
         AuthStateSession.remove(session, sessionId);
-
-        boolean accountLinked = FederatedIdentity.isTelegramLinked(session,
-          provider.getConfig().getAlias(), tgUserId);
         if (accountLinked || autoLinkUsername != null) {
           sendToTelegram(auth, isLinkMode ? "telegram.link-success" : "telegram.login-success");
         } else {
-          return telegramRejected(sessionId, auth, isLinkMode ? "telegram.link-failed" : "telegram.login-failed");
+          return telegramRejected(sessionId, auth,
+            isLinkMode ? "telegram.link-failed" : "telegram.login-failed");
         }
 
         BrokeredIdentityContext context = buildContext(
@@ -355,7 +349,9 @@ public class TelegramIdentityProvider extends
       return matchedUser != null && matchedUser.getId().equals(authenticatedUser.getId());
     }
 
-    /** Refuse the scan, say why in the Telegram chat, and show the user an error. */
+    /**
+     * Refuse the scan, say why in the Telegram chat, and show the user an error.
+     */
     private Response telegramRejected(String sessionId, AuthState auth, String message) {
       AuthStateSession.remove(session, sessionId);
       sendToTelegram(auth, message);
