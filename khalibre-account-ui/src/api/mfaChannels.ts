@@ -10,6 +10,8 @@ export type ChannelState = {
   label?: string;
   since?: string;
   count?: number;
+  /** telegram: true when the user must link a Telegram account with the same phone number on file. */
+  requirePhoneMatch?: boolean;
 };
 
 /** Response of GET /edc-mfa-settings/channels. */
@@ -42,6 +44,8 @@ export type StartResult = {
   label?: string;
   codeLength?: number;
   expiresInMinutes?: number;
+  /** telegram: true when the user must link a Telegram account with the same phone number on file. */
+  requirePhoneMatch?: boolean;
 };
 
 export type TelegramScan = {

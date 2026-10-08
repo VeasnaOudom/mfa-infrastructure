@@ -57,7 +57,15 @@ public class TelegramIdentityProvider extends
   private static final String ATTR_TG_USERNAME = EdcChannelDetector.TELEGRAM_USERNAME_ATTR;
   private static final String ATTR_TG_USER_ID = EdcChannelDetector.TELEGRAM_USER_ID_ATTR;
   private static final String ATTR_TG_USER_PHONE_NUMBER = "telegram-phone-number";
-  private static final String ATTR_TG_REQUIRE_PHONE_MATCH = "telegram-require-phone-match";
+  public static final String ATTR_TG_REQUIRE_PHONE_MATCH = "telegram-require-phone-match";
+
+  /**
+   * Checks if the user has the {@code telegram-require-phone-match} attribute set to true.
+   */
+  static boolean isPhoneMatchRequired(UserModel user) {
+    String value = user.getFirstAttribute(ATTR_TG_REQUIRE_PHONE_MATCH);
+    return !StringUtil.isBlank(value) && value.equalsIgnoreCase("true");
+  }
 
   public TelegramIdentityProvider(KeycloakSession session, OAuth2IdentityProviderConfig config) {
     super(session, config);
@@ -150,7 +158,7 @@ public class TelegramIdentityProvider extends
   private Response renderPage(AuthenticationRequest request, URI callbackUrl) {
     LoginFormsProvider formProvider = session.getProvider(LoginFormsProvider.class);
     formProvider.setAuthenticationSession(request.getAuthenticationSession());
-    UserModel user = request.getAuthenticationSession().getAuthenticatedUser();
+    UserModel user = findAuthenticatedUser(session, request.getAuthenticationSession());
     if (user != null) {
       formProvider.setUser(user);
     }
@@ -159,6 +167,8 @@ public class TelegramIdentityProvider extends
     formProvider.setAttribute("linkMode", isLinkMode);
     formProvider.setAttribute("callbackUrl", callbackUrl.toString());
     formProvider.setAttribute("providerAlias", getConfig().getAlias());
+    boolean requirePhoneMatch = isLinkMode && user != null && isPhoneMatchRequired(user);
+    formProvider.setAttribute("requirePhoneMatch", requirePhoneMatch);
     return formProvider.createForm("telegram-qr-link.ftl");
   }
 
@@ -167,6 +177,24 @@ public class TelegramIdentityProvider extends
       return input;
     }
     return input.replaceAll("[^\\u0000-\\uFFFF]", "");
+  }
+
+  private static UserModel findAuthenticatedUser(KeycloakSession session,
+    AuthenticationSessionModel authSession) {
+    UserModel user = authSession.getAuthenticatedUser();
+    if (user != null) {
+      return user;
+    }
+
+    UserSessionModel userSession = session.getContext().getUserSession();
+    if (userSession == null) {
+      RootAuthenticationSessionModel rootSession = authSession.getParentSession();
+      if (rootSession != null) {
+        RealmModel realm = session.getContext().getRealm();
+        userSession = session.sessions().getUserSession(realm, rootSession.getId());
+      }
+    }
+    return userSession != null ? userSession.getUser() : null;
   }
 
   private static class Endpoint {
@@ -208,7 +236,7 @@ public class TelegramIdentityProvider extends
             log.warnf("method=authenticate chat=%s message=TelegramAlreadyLinked", tgUserId);
             return telegramRejected(sessionId, auth, "telegram.link-already-linked");
           }
-          UserModel authenticatedUser = findAuthenticatedUser(authSession);
+          UserModel authenticatedUser = findAuthenticatedUser(session, authSession);
           if (authenticatedUser == null
             || (isPhoneMatchRequired(authenticatedUser)
             && !isPhoneMatched(authenticatedUser, auth.getPhoneNumber()))) {
@@ -247,23 +275,6 @@ public class TelegramIdentityProvider extends
       // Delegated rather than kept here: the MFA link path needs the same lookup-and-send, and two
       // copies of a bot-token lookup is two places for a masked token to be handled differently.
       TelegramNotifier.send(session, auth == null ? null : auth.getTelegramUserId(), messageKey);
-    }
-
-    private UserModel findAuthenticatedUser(AuthenticationSessionModel authSession) {
-      UserModel user = authSession.getAuthenticatedUser();
-      if (user != null) {
-        return user;
-      }
-
-      UserSessionModel userSession = session.getContext().getUserSession();
-      if (userSession == null) {
-        RootAuthenticationSessionModel rootSession = authSession.getParentSession();
-        if (rootSession != null) {
-          RealmModel realm = session.getContext().getRealm();
-          userSession = session.sessions().getUserSession(realm, rootSession.getId());
-        }
-      }
-      return userSession != null ? userSession.getUser() : null;
     }
 
     private String findAutoLinkUsername(String phoneNumber) {
@@ -327,8 +338,7 @@ public class TelegramIdentityProvider extends
     }
 
     private boolean isPhoneMatchRequired(UserModel user) {
-      String value = user.getFirstAttribute(ATTR_TG_REQUIRE_PHONE_MATCH);
-      return !StringUtil.isBlank(value) && value.equalsIgnoreCase("true");
+      return TelegramIdentityProvider.isPhoneMatchRequired(user);
     }
 
     private boolean isPhoneMatched(UserModel authenticatedUser, String phoneNumber) {

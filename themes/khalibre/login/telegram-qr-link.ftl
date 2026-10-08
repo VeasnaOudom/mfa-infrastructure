@@ -26,6 +26,12 @@
       <span>${msg("telegram.phone-number-prompt")}</span>
     </div>
 
+    <#if requirePhoneMatch>
+    <div class="edc-note-info" id="phone-match-requirement">
+      <span>${msg("telegram.phone-match-requirement")}</span>
+    </div>
+    </#if>
+
     <button type="button" id="qr-refresh"
             class="${properties.kcButtonClass!} ${properties.kcButtonDefaultClass!} ${properties.kcButtonBlockClass!} edc-secondary">
       ${msg("telegram.refreshCode")}

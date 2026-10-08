@@ -24,11 +24,13 @@ import org.keycloak.models.IdentityProviderModel;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.RealmModel;
 import org.keycloak.models.UserModel;
+import org.keycloak.utils.StringUtil;
 
 import com.khalibre.keycloak.provider.account.AccountConsoleCaller;
 import com.khalibre.keycloak.provider.privacyIdea.PrivacyIdeaSettings;
 import com.khalibre.keycloak.provider.privacyIdea.service.PrivacyIdeaService;
 import com.khalibre.keycloak.provider.telegram.bot.TelegramBotClient;
+import com.khalibre.keycloak.provider.telegram.idp.TelegramIdentityProvider;
 import com.khalibre.keycloak.provider.telegram.state.AuthState;
 import com.khalibre.keycloak.provider.telegram.state.AuthStateCache;
 import com.khalibre.keycloak.provider.telegram.state.AuthStateSession;
@@ -129,7 +131,7 @@ public class EdcMfaSettingsResource implements org.keycloak.services.resource.Re
         EdcChannelDetector.detect(session, privacyIdea, user);
 
     Map<String, Object> result = new LinkedHashMap<>();
-    result.put("telegram", telegramState(detected));
+    result.put("telegram", telegramState(detected, user));
     result.put("totp", codeChannelState(CHANNEL_TOTP, TYPE_TOTP, user, adminToken, privacyIdea,
         detected));
     result.put("email", emailState(detected, user, adminToken, privacyIdea));
@@ -142,13 +144,16 @@ public class EdcMfaSettingsResource implements org.keycloak.services.resource.Re
     return json(result);
   }
 
-  private Map<String, Object> telegramState(Map<String, String> detected) {
+  private Map<String, Object> telegramState(Map<String, String> detected, UserModel user) {
     Map<String, Object> state = new LinkedHashMap<>();
     boolean active = "1".equals(detected.get(EdcMfaChannelsAuthenticator.NOTE_TELEGRAM));
     state.put("active", active);
     if (active) {
       state.put("label", detected.get(EdcMfaChannelsAuthenticator.NOTE_TELEGRAM_HANDLE));
     }
+    // Phone match requirement: only shown when user has telegram-require-phone-match enabled
+    String requirePhoneMatch = user.getFirstAttribute(TelegramIdentityProvider.ATTR_TG_REQUIRE_PHONE_MATCH);
+    state.put("requirePhoneMatch", !StringUtil.isBlank(requirePhoneMatch) && requirePhoneMatch.equalsIgnoreCase("true"));
     return state;
   }
 
@@ -377,8 +382,10 @@ public class EdcMfaSettingsResource implements org.keycloak.services.resource.Re
 
     log.infof("method=startTelegramScan user=%s scanKey=%s stateId=%s",
         user.getUsername(), scanKey(user), state.getId());
+    String requirePhoneMatch = user.getFirstAttribute(TelegramIdentityProvider.ATTR_TG_REQUIRE_PHONE_MATCH);
+    boolean phoneMatchRequired = !StringUtil.isBlank(requirePhoneMatch) && requirePhoneMatch.equalsIgnoreCase("true");
     return json(Map.of("channel", CHANNEL_TELEGRAM, "deepLink", deepLink,
-        "botUsername", botUsername));
+        "botUsername", botUsername, "requirePhoneMatch", phoneMatchRequired));
   }
 
   // ---------------------------------------------------------------- verify

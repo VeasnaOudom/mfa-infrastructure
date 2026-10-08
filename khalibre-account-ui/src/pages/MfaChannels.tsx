@@ -550,11 +550,15 @@ const [error, setError] = useState<string>();
   return (
     <Modal isOpen variant="medium" onClose={onCancel} title={t(`mfaChannel.${channel}`)}>
       <ModalBoxBody>
-        {channel === "telegram" ? (
-          <>
-            <Text>{t("mfaTelegramScanPrompt", { bot: start.botUsername })}</Text>
+{channel === "telegram" ? (
+            <>
+              <Text>{t("mfaTelegramScanPrompt", { bot: start.botUsername })}</Text>
 
-            {/* The host is always mounted - the effect draws into it. Unmounting it to show a
+              {start.requirePhoneMatch && (
+                <Alert variant="info" isInline title={t("mfaTelegramPhoneMatchRequirement")} className={styles.formRow} />
+              )}
+
+              {/* The host is always mounted - the effect draws into it. Unmounting it to show a
                 spinner first would mean the code appears a frame late, which reads as a flicker. */}
             <div
               ref={qrHost}
