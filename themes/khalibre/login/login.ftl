@@ -2,6 +2,8 @@
 <@layout.registrationLayout displayMessage=!messagesPerField.existsError('username','password') displayInfo=realm.password && realm.registrationAllowed && !registrationDisabled??; section>
     <#if section = "header">
         ${msg("loginAccountTitle")}
+    <#elseif section = "footer">
+        <div class="edc-help">${msg("edcHelpText")}</div>
     <#elseif section = "form">
         <p class="subtitle">${msg("edcLoginSubtitle")}</p>
         <div id="kc-form">

@@ -2,25 +2,37 @@
 <@layout.registrationLayout displayInfo=false displayMessage=true; section>
   <#if section = "header">
     <#if linkMode>${msg("telegram.link-title")}<#else>${msg("telegram.title")}</#if>
+  <#elseif section = "footer">
+    <div class="edc-help">${msg("telegram.notLinked")}</div>
   <#elseif section = "form">
     <script src="${url.resourcesPath}/js/qr-code-styling-1.9.2.js"></script>
 
-    <#if linkMode>
-      <p class="subtitle">${msg("telegram.link-description")}</p>
-    <#else>
-      <p class="subtitle">${msg("telegram.description")}</p>
-    </#if>
+    <p class="subtitle">
+      <#if linkMode>${msg("telegram.link-description")}<#else>${msg("telegram.description")}</#if>
+    </p>
 
     <div id="qr-container"></div>
-    <div class="progress-bar-container">
-      <div id="progress-bar" class="progress-bar-fill"></div>
-    </div>
-    <p class="hint">
+
+    <p class="edc-waiting" id="qr-status">
+      ${msg("telegram.waiting")} <b id="qr-timer">1:00</b>
+    </p>
+
+    <p class="hint" id="qr-hint">
       ${msg("telegram.using-this-device")}
       <a id="qr-link" class="kh-link" href="#" data-url="">${msg("doClickHere")}</a>
     </p>
-    <div id="phone-number-prompt" hidden>
-      <p class="subtitle">${msg("telegram.phone-number-prompt")}</p>
+
+    <div class="edc-note-info" id="phone-number-prompt" hidden>
+      <span>${msg("telegram.phone-number-prompt")}</span>
+    </div>
+
+    <button type="button" id="qr-refresh"
+            class="${properties.kcButtonClass!} ${properties.kcButtonDefaultClass!} ${properties.kcButtonBlockClass!} edc-secondary">
+      ${msg("telegram.refreshCode")}
+    </button>
+
+    <div class="edc-alt-signin">
+      <a href="${url.loginUrl}">${msg("telegram.signInInstead")}</a>
     </div>
 
     <script>
@@ -33,10 +45,17 @@
         let timeLeft = duration;
         let isRedirecting = false;
         let phoneNumberRequestPending = false;
+        let isRefreshing = false;
 
         const apiBase = "/realms/${realm.name}";
         const providerAlias = "${providerAlias!}";
         const callbackUrl = "${callbackUrl!}";
+
+        function formatCountdown(seconds) {
+          const minutes = Math.floor(seconds / 60);
+          const secs = String(Math.max(seconds, 0) % 60).padStart(2, "0");
+          return minutes + ":" + secs;
+        }
 
         async function checkAuthStatus() {
           if (isRedirecting) return;
@@ -90,6 +109,8 @@
         }
 
         function fetchQRCodeDataAndRender() {
+          if (isRefreshing || isRedirecting) return;
+          isRefreshing = true;
           fetch(apiBase + "/telegram-auth/" + providerAlias + "/qr")
             .then(function (response) { return response.json(); })
             .then(function (data) {
@@ -99,22 +120,30 @@
               container.innerHTML = "";
 
               qrCode = new QRCodeStyling({
-                width: 240,
-                height: 240,
+                width: 208,
+                height: 208,
                 type: "svg",
                 data: data.deepLink,
                 image: "${url.resourcesPath}/img/telegram.svg",
-                dotsOptions: { color: "#000000", type: "rounded" },
+                dotsOptions: { color: "#2b3072", type: "rounded" },
                 cornersSquareOptions: { type: "extra-rounded" },
                 imageOptions: { saveAsBlob: true, imageSize: 0.4, margin: 0 },
                 backgroundOptions: { color: "#ffffff" },
                 qrOptions: { errorCorrectionLevel: "M" }
               });
               qrCode.append(container);
-              startProgressBar();
+
+              phoneNumberRequestPending = false;
+              const prompt = document.getElementById("phone-number-prompt");
+              if (prompt) prompt.hidden = true;
+
+              startCountdown();
             })
             .catch(function () {
               console.error("Failed to fetch QR code.");
+            })
+            .finally(function () {
+              isRefreshing = false;
             });
         }
 
@@ -126,14 +155,18 @@
           }
         });
 
-        function startProgressBar() {
+        document.getElementById("qr-refresh").addEventListener("click", function () {
+          fetchQRCodeDataAndRender();
+        });
+
+        function startCountdown() {
           clearInterval(interval);
           clearInterval(checkLinkInterval);
           timeLeft = duration;
           const qrContainer = document.getElementById("qr-container");
-          const progressBar = document.getElementById("progress-bar");
+          const timer = document.getElementById("qr-timer");
           if (qrContainer) qrContainer.classList.remove("blurred");
-          if (progressBar) progressBar.style.width = "100%";
+          if (timer) timer.textContent = formatCountdown(timeLeft);
 
           checkLinkInterval = setInterval(function () {
             checkAuthStatus();
@@ -141,8 +174,7 @@
 
           interval = setInterval(function () {
             timeLeft--;
-            const percent = (timeLeft / duration) * 100;
-            if (progressBar) progressBar.style.width = percent + "%";
+            if (timer) timer.textContent = formatCountdown(timeLeft);
 
             if (timeLeft <= 0) {
               clearInterval(interval);
@@ -171,10 +203,6 @@
         fetchQRCodeDataAndRender();
       })();
     </script>
-
-    <div class="${properties.kcFormOptionsWrapperClass!}">
-        <span><a href="${url.loginUrl}">${kcSanitize(msg("backToLogin"))?no_esc}</a></span>
-    </div>
   <#elseif section = "socialProviders">
   </#if>
 </@layout.registrationLayout>

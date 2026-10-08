@@ -181,8 +181,8 @@
       </div>
 
       <@loginFooter.content/>
-      <div class="edc-help">${msg("edcHelpText")}</div>
     </div>
+    <#nested "footer">
   </div>
 </body>
 </html>
