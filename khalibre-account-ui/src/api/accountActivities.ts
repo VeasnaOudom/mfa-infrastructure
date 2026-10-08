@@ -119,6 +119,8 @@ export type AccountActivitiesResponse = {
   events: AccountActivity[];
 };
 
+type Translator = (key: string, options?: { defaultValue?: string }) => string;
+
 const isErrorType = (type: string) => type.endsWith("_ERROR");
 
 /**
@@ -137,6 +139,77 @@ export const eventTypeFallback = (type: string) =>
     index === 0 ? part.charAt(0).toUpperCase() + part.slice(1) : part,
   )
   .join(" ");
+
+const titleCase = (value: string) =>
+  value
+    .split(/[_\s-]+/)
+    .filter((entry) => entry.length > 0)
+    .map((entry) => entry.charAt(0).toUpperCase() + entry.slice(1).toLowerCase())
+    .join(" ");
+
+const channelFrom = (activity: AccountActivity) => activity.details?.mfa_channel;
+
+const methodKeyFromChannel = (channel?: string) => {
+  switch (channel) {
+    case "telegram":
+      return "accountActivitiesMethodTelegram";
+    case "totp":
+      return "accountActivitiesMethodAuthenticatorApp";
+    case "email":
+      return "accountActivitiesMethodEmail";
+    case "backupCode":
+      return "accountActivitiesMethodBackupCode";
+    default:
+      return undefined;
+  }
+};
+
+export const getActivityLabel = (
+  activity: AccountActivity,
+  t: Translator,
+): string => {
+  const channel = channelFrom(activity);
+
+  switch (activity.type) {
+    case "CLIENT_INITIATED_ACCOUNT_LINKING":
+      return t("accountActivitiesMappedInitiateLinkTelegram");
+    case "FEDERATED_IDENTITY_LINK":
+      return channel === "telegram"
+        ? t("accountActivitiesMappedTelegramAdded")
+        : t("accountActivitiesMappedTelegramLinked");
+    case "REMOVE_FEDERATED_IDENTITY":
+      return channel === "telegram"
+        ? t("accountActivitiesMappedTelegramRemoved")
+        : t("accountActivitiesMappedTelegramUnlinked");
+    case "UPDATE_EMAIL":
+      return t("accountActivitiesMappedEmailAdded");
+    default:
+      return t(eventTypeKey(activity.type), {
+        defaultValue: eventTypeFallback(activity.type),
+      });
+  }
+};
+
+export const getMethodLabel = (
+  activity: AccountActivity,
+  t: Translator,
+): string => {
+  const methodFromChannel = methodKeyFromChannel(channelFrom(activity));
+  if (methodFromChannel) {
+    return t(methodFromChannel);
+  }
+
+  const identityProvider = activity.details?.identity_provider;
+  if (identityProvider != null && identityProvider.trim() !== "") {
+    return titleCase(identityProvider);
+  }
+
+  if (activity.type === "LOGIN" || activity.type === "LOGIN_ERROR") {
+    return t("accountActivitiesMethodPassword");
+  }
+
+  return t("accountActivitiesMethodAccountConsole");
+};
 
 /** Server-side filters supported by the account activities endpoint. */
 export type AccountActivitiesFilter = {

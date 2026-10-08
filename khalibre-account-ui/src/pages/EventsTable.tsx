@@ -25,10 +25,11 @@ import {
   type AccountActivity,
   ALL_EVENT_TYPES,
   eventTypeFallback,
+  getActivityLabel,
+  getMethodLabel,
   eventTypeKey,
 } from "../api/accountActivities";
 import { formatDateTime } from "../utils/formatDate";
-import { isErrorActivity } from "../utils/events";
 import styles from "./EventsTable.module.css";
 import { TypeaheadSelect } from "../components/TypeHeadSelect.tsx";
 
@@ -78,7 +79,7 @@ export const EventsTable = ({
   const [typeSelectOpen, setTypeSelectOpen] = useState(false);
 
   const filterLabels: Record<keyof EventsFilter, string> = {
-    type: t("accountActivitiesEventType"),
+    type: t("accountActivitiesActivityType"),
     dateFrom: t("accountActivitiesDateFrom"),
     dateTo: t("accountActivitiesDateTo"),
     ipAddress: t("accountActivitiesIpAddress"),
@@ -108,6 +109,8 @@ export const EventsTable = ({
     return t("accountActivitiesUnknownDevice");
   };
 
+  const eventLabel = (type: string) =>
+    t(eventTypeKey(type), {defaultValue: eventTypeFallback(type)});
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -135,8 +138,7 @@ export const EventsTable = ({
       document.removeEventListener("visibilitychange", handleVisibilityChange);
   }, [setSearchOpen]);
 
-  const eventTypeLabel = (type: string) =>
-    t(eventTypeKey(type), {defaultValue: eventTypeFallback(type)});
+  const eventTypeLabel = (type: string) => eventLabel(type);
 
   const commitFilters = (filter: EventsFilter) => {
     onFilter(filter);
@@ -199,7 +201,7 @@ export const EventsTable = ({
                 isExpanded={searchOpen}
                 className={`edc-button-input ${styles.menuToggle}`}
               >
-                {t("accountActivitiesSearchEvents")}
+                {t("accountActivitiesSearchActivities")}
               </MenuToggle>
               {searchOpen && (
                 <div className={styles.filterPanel}>
@@ -211,14 +213,14 @@ export const EventsTable = ({
                     }}
                   >
                     <FormGroup
-                      label={t("accountActivitiesEventType")}
+                      label={t("accountActivitiesActivityType")}
                       fieldId="kc-eventType"
                     >
                       <TypeaheadSelect
                         className={styles.eventTypeSelect}
                         data-testid="event-type-searchField"
                         maxHeight={300}
-                        typeAheadAriaLabel={t("accountActivitiesEventType")}
+                        typeAheadAriaLabel={t("accountActivitiesActivityType")}
                         onToggle={setTypeSelectOpen}
                         isOpen={typeSelectOpen}
                         selections={draftFilter.type}
@@ -383,8 +385,8 @@ export const EventsTable = ({
             <Thead>
               <Tr>
                 <Th style={{verticalAlign: 'middle'}}>{t("accountActivitiesDate")}</Th>
-                <Th style={{verticalAlign: 'middle'}}>{t("accountActivitiesEvent")}</Th>
-                <Th style={{verticalAlign: 'middle'}}>{t("accountActivitiesClient")}</Th>
+                <Th style={{verticalAlign: 'middle'}}>{t("accountActivitiesActivity")}</Th>
+                <Th style={{verticalAlign: 'middle'}}>{t("accountActivitiesMethod")}</Th>
                 <Th style={{verticalAlign: 'middle'}}>{t("accountActivitiesDevice")}</Th>
                 <Th style={{verticalAlign: 'middle'}}>{t("accountActivitiesIpAddress")}</Th>
                 <Th style={{verticalAlign: 'middle'}}>{t("accountActivitiesResult")}</Th>
@@ -394,7 +396,7 @@ export const EventsTable = ({
             <Tbody>
               {loading ? (
                 <Tr>
-                  <Td colSpan={6}
+                  <Td colSpan={8}
                       style={{textAlign: 'center', verticalAlign: 'middle'}}>
                     <div className={styles.tableLoading}>
                       <Spinner className={styles.tableSpinner}/>
@@ -403,8 +405,9 @@ export const EventsTable = ({
                 </Tr>
               ) : (
                 activities.map((activity, index) => {
-                  const typeKey = eventTypeKey(activity.type);
                   const device = getDeviceLabel(activity);
+                  const activityLabel = getActivityLabel(activity, t);
+                  const methodLabel = getMethodLabel(activity, t);
 
                   return (
                     <Tr key={`${activity.time}-${index}`}>
@@ -413,20 +416,12 @@ export const EventsTable = ({
                         {formatDateTime(activity.time)}
                       </Td>
                       <Td style={{verticalAlign: 'middle'}}
-                          dataLabel={t("accountActivitiesEvent")}>
-                        <Label
-                          color={isErrorActivity(activity) ? "red" : "grey"}
-                          isCompact
-                        >
-                          {t(typeKey, {
-                            defaultValue: eventTypeFallback(activity.type),
-                          })}
-                        </Label>
-                        {activity.error ? <div>{activity.error}</div> : null}
+                          dataLabel={t("accountActivitiesActivity")}>
+                        {activityLabel}
                       </Td>
                       <Td style={{verticalAlign: 'middle'}}
-                          dataLabel={t("accountActivitiesClient")}>
-                        {activity.clientId ?? "-"}
+                          dataLabel={t("accountActivitiesMethod")}>
+                        {methodLabel}
                       </Td>
                       <Td style={{verticalAlign: 'middle'}}
                           dataLabel={t("accountActivitiesDevice")}>
