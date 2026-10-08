@@ -1,14 +1,14 @@
 package com.khalibre.keycloak.provider.telegram.rest;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.khalibre.keycloak.provider.telegram.state.AuthState;
-import com.khalibre.keycloak.provider.telegram.state.AuthStateCache;
-import com.khalibre.keycloak.provider.telegram.state.AuthStateSession;
 import com.khalibre.keycloak.provider.telegram.bot.TelegramBotClient;
 import com.khalibre.keycloak.provider.telegram.bot.TelegramBotManager;
 import com.khalibre.keycloak.provider.telegram.bot.TelegramBotMode;
 import com.khalibre.keycloak.provider.telegram.bot.TelegramUpdateHandler;
 import com.khalibre.keycloak.provider.telegram.bot.TelegramWebhookPayload;
+import com.khalibre.keycloak.provider.telegram.state.AuthState;
+import com.khalibre.keycloak.provider.telegram.state.AuthStateCache;
+import com.khalibre.keycloak.provider.telegram.state.AuthStateSession;
 import com.khalibre.keycloak.provider.util.FederatedIdentity;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.GET;
@@ -77,14 +77,7 @@ public class TelegramAuthResource implements RealmResourceProvider {
         .build();
     }
 
-    AuthState oldAuthState = AuthStateSession.get(session, getAuthSessionId());
-    if (oldAuthState != null && "EXPIRED".equalsIgnoreCase(oldAuthState.getStatus())) {
-      LoginFormsProvider formProvider = session.getProvider(LoginFormsProvider.class);
-      String message = formProvider.getMessage("telegram.session-expired");
-      new TelegramBotClient(botToken).sendMessage(oldAuthState.getTelegramUserId(), message, null);
-    }
-
-    AuthState authState = AuthStateSession.create(session, getAuthSessionId());
+    AuthState authState = AuthStateSession.create(getAuthSessionId());
     String deepLink = getDeepLink(botUsername, authState.getId());
 
     Map<String, Object> result = new HashMap<>();
@@ -213,7 +206,7 @@ public class TelegramAuthResource implements RealmResourceProvider {
   @Path("status")
   @Produces(MediaType.APPLICATION_JSON)
   public Response getStatus() {
-    AuthState state = AuthStateSession.get(session, getAuthSessionId());
+    AuthState state = AuthStateSession.get(getAuthSessionId());
     if (state == null) {
       return Response.status(Status.NOT_FOUND)
         .entity(Map.of("status", "EXPIRED"))
@@ -246,7 +239,7 @@ public class TelegramAuthResource implements RealmResourceProvider {
         .build();
     }
 
-    AuthState state = AuthStateSession.get(session, getAuthSessionId());
+    AuthState state = AuthStateSession.get(getAuthSessionId());
     if (state == null) {
       return Response.status(Status.NOT_FOUND)
         .entity(Map.of("status", "EXPIRED"))

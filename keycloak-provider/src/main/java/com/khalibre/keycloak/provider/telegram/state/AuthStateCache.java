@@ -1,6 +1,5 @@
 package com.khalibre.keycloak.provider.telegram.state;
 
-import java.time.Instant;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -30,13 +29,10 @@ public class AuthStateCache {
 
   static {
     scheduler.scheduleAtFixedRate(() -> {
-      cache.entrySet().removeIf(entry -> isRemoved(entry.getValue()));
-      // A caller's key is only useful while the state behind it is still usable, so drop the two
-      // together. Leaving the mapping behind would let a later request find an already-dead state
-      // and report it as an expiry rather than as nothing to do.
+      cache.entrySet().removeIf(entry -> entry.getValue().isExpired());
       keyedIds.entrySet().removeIf(entry -> {
         AuthState state = cache.get(entry.getValue());
-        return state == null || isRemoved(state);
+        return state == null || state.isExpired();
       });
     }, 30, 30, TimeUnit.SECONDS);
   }
@@ -66,15 +62,11 @@ public class AuthStateCache {
     if (state == null) {
       return null;
     }
-    if (isRemoved(state)) {
+    if (state.isExpired()) {
       cache.remove(id);
       return null;
     }
     return state;
-  }
-
-  private static boolean isRemoved(AuthState state) {
-    return state.getExpiresAt() + 60 < Instant.now().getEpochSecond();
   }
 
   public static AuthState findByTelegramUserId(String telegramUserId) {
@@ -89,19 +81,25 @@ public class AuthStateCache {
     return null;
   }
 
-  /** Records that {@code key}'s scan is {@code id}. */
+  /**
+   * Records that {@code key}'s scan is {@code id}.
+   */
   public static void putKeyed(String key, String id) {
     if (key != null && id != null) {
       keyedIds.put(key, id);
     }
   }
 
-  /** @return the state id recorded for {@code key}, or {@code null} if there is none */
+  /**
+   * @return the state id recorded for {@code key}, or {@code null} if there is none
+   */
   public static AuthState getKeyed(String key) {
     return get(idFor(key));
   }
 
-  /** Forgets {@code key}. Safe to call for a key that was never there. */
+  /**
+   * Forgets {@code key}. Safe to call for a key that was never there.
+   */
   public static void removeKeyed(String key) {
     if (key != null) {
       keyedIds.remove(key);

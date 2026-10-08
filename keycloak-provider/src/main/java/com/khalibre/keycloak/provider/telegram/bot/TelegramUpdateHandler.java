@@ -1,11 +1,10 @@
 package com.khalibre.keycloak.provider.telegram.bot;
 
-import org.jboss.logging.Logger;
-
 import com.khalibre.keycloak.provider.telegram.bot.TelegramWebhookPayload.Contact;
 import com.khalibre.keycloak.provider.telegram.bot.TelegramWebhookPayload.From;
 import com.khalibre.keycloak.provider.telegram.state.AuthState;
 import com.khalibre.keycloak.provider.telegram.state.AuthStateCache;
+import org.jboss.logging.Logger;
 
 public class TelegramUpdateHandler {
 
@@ -34,9 +33,9 @@ public class TelegramUpdateHandler {
     String text = update.getMessage().getText();
 
     LOG.infof("method=handleUpdate chat=%s text=%s contact=%s",
-        from == null ? null : from.getId(),
-        text == null ? null : text,
-        update.getMessage().getContact() != null);
+      from == null ? null : from.getId(),
+      text == null ? null : text,
+      update.getMessage().getContact() != null);
 
     if (text != null && text.startsWith(COMMAND_START_LOGIN)) {
       handleStartLoginCommand(from, text);
@@ -51,7 +50,7 @@ public class TelegramUpdateHandler {
     AuthState state = AuthStateCache.get(authStateId);
     if (state == null) {
       LOG.warnf("method=handleStartLoginCommand chat=%s state=%s message=NoSuchScan",
-          from == null ? null : from.getId(), authStateId);
+        from == null ? null : from.getId(), authStateId);
       return;
     }
 
@@ -60,10 +59,10 @@ public class TelegramUpdateHandler {
     state.setLastName(from.getLastName());
     state.setUsername(from.getUsername());
     state.setPhoneNumberRequested(false);
-    state.setStatus(state.isExpired() ? "EXPIRED" : "BOT_STARTED");
+    state.setStatus("BOT_STARTED");
     AuthStateCache.store(authStateId, state);
     LOG.infof("method=handleStartLoginCommand chat=%s state=%s status=%s",
-        from.getId(), authStateId, state.getStatus());
+      from.getId(), authStateId, state.getStatus());
   }
 
   private void handleContact(TelegramWebhookPayload.From from,
@@ -71,10 +70,10 @@ public class TelegramUpdateHandler {
     AuthState state = AuthStateCache.findByTelegramUserId(from.getId());
     if (state != null && isUserContact(from, contact)) {
       state.setPhoneNumber(contact.getPhoneNumber());
-      state.setStatus(state.isExpired() ? "EXPIRED" : "COMPLETED");
+      state.setStatus("COMPLETED");
       AuthStateCache.store(state.getId(), state);
       LOG.infof("method=handleContact chat=%s state=%s status=%s", from.getId(), state.getId(),
-          state.getStatus());
+        state.getStatus());
     } else {
       LOG.warnf("method=handleContact chat=%s message=NoScanInProgressForChat", from.getId());
     }

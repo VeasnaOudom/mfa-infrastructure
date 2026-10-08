@@ -220,7 +220,7 @@ public class TelegramIdentityProvider extends
         session.getContext().setAuthenticationSession(authSession);
         String sessionId = authSession.getParentSession().getId();
 
-        AuthState auth = AuthStateSession.get(session, sessionId);
+        AuthState auth = AuthStateSession.get(sessionId);
         if (auth == null || !"COMPLETED".equals(auth.getStatus())) {
           return telegramRejected(sessionId, auth, "telegram.session-expired");
         }
@@ -247,7 +247,7 @@ public class TelegramIdentityProvider extends
           autoLinkUsername = findAutoLinkUsername(auth.getPhoneNumber());
         }
 
-        AuthStateSession.remove(session, sessionId);
+        AuthStateSession.remove(sessionId);
         if (accountLinked || autoLinkUsername != null) {
           sendToTelegram(auth, isLinkMode ? "telegram.link-success" : "telegram.login-success");
         } else {
@@ -363,7 +363,7 @@ public class TelegramIdentityProvider extends
      * Refuse the scan, say why in the Telegram chat, and show the user an error.
      */
     private Response telegramRejected(String sessionId, AuthState auth, String message) {
-      AuthStateSession.remove(session, sessionId);
+      AuthStateSession.remove(sessionId);
       sendToTelegram(auth, message);
       event.event(EventType.IDENTITY_PROVIDER_LOGIN);
       event.error(Errors.IDENTITY_PROVIDER_LOGIN_FAILURE);
@@ -375,7 +375,7 @@ public class TelegramIdentityProvider extends
         AuthenticationSessionModel authSession = session.getContext().getAuthenticationSession();
         if (authSession != null) {
           String sessionId = authSession.getParentSession().getId();
-          AuthState auth = AuthStateSession.get(session, sessionId);
+          AuthState auth = AuthStateSession.get(sessionId);
           if (auth != null && auth.getTelegramUserId() != null) {
             String botToken = provider.getBotToken();
             if (botToken != null) {

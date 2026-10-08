@@ -247,7 +247,7 @@ public class PrivacyIdeaWebhookResource implements RealmResourceProvider {
           .entity(Map.of("error", "No active sign-in for this browser")).build();
     }
 
-    AuthState state = AuthStateSession.get(session, rootSession.getId());
+    AuthState state = AuthStateSession.get(rootSession.getId());
     if (state == null) {
       return Response.status(Response.Status.NOT_FOUND)
           .entity(Map.of("error", "No Telegram scan in progress")).build();
@@ -256,14 +256,14 @@ public class PrivacyIdeaWebhookResource implements RealmResourceProvider {
     EdcTelegramLink.Outcome outcome = EdcTelegramLink.apply(session, realm, user, state);
     if (outcome != EdcTelegramLink.Outcome.LINKED) {
       if (outcome == EdcTelegramLink.Outcome.EXPIRED) {
-        AuthStateSession.remove(session, rootSession.getId());
+        AuthStateSession.remove(rootSession.getId());
       }
       return Response.status(EdcTelegramLink.statusOf(outcome))
           .entity(EdcTelegramLink.problem(outcome)).build();
     }
 
     // Single use: a second enrolment attempt must start from a fresh scan.
-    AuthStateSession.remove(session, rootSession.getId());
+    AuthStateSession.remove(rootSession.getId());
 
     log.infof("method=linkTelegram status=SUCCESS username=%s", user.getUsername());
     return Response.ok(Map.of("status", "ok"), MediaType.APPLICATION_JSON).build();

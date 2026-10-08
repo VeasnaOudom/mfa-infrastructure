@@ -1,7 +1,5 @@
 package com.khalibre.keycloak.provider.telegram.state;
 
-import org.keycloak.models.KeycloakSession;
-
 /**
  * Associates a caller with the scan it started.
  *
@@ -28,17 +26,17 @@ import org.keycloak.models.KeycloakSession;
  */
 public class AuthStateSession extends AuthStateCache {
 
-  public static AuthState create(KeycloakSession session, String sessionId) {
+  public static AuthState create(String key) {
     AuthState authState = createEmpty();
-    putKeyed(sessionId, authState.getId());
+    putKeyed(key, authState.getId());
     return authState;
   }
 
-  public static AuthState get(KeycloakSession session, String sessionId) {
-    return getKeyed(sessionId);
+  public static AuthState get(String key) {
+    return getKeyed(key);
   }
 
-  public static void remove(KeycloakSession session, String sessionId) {
-    removeKeyed(sessionId);
+  public static void remove(String key) {
+    removeKeyed(key);
   }
 }

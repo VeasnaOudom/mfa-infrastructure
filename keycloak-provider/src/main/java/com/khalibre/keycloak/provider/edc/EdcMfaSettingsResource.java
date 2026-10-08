@@ -376,8 +376,8 @@ public class EdcMfaSettingsResource implements org.keycloak.services.resource.Re
       privacyIdea.initToken(user.getUsername(), TYPE_SPASS, adminToken, Map.of());
     }
 
-    AuthStateSession.remove(session, scanKey(user));
-    AuthState state = AuthStateSession.create(session, scanKey(user));
+    AuthStateSession.remove(scanKey(user));
+    AuthState state = AuthStateSession.create(scanKey(user));
     String deepLink = "https://t.me/" + botUsername + "?start=login_" + state.getId();
 
     log.infof("method=startTelegramScan user=%s scanKey=%s stateId=%s",
@@ -430,7 +430,7 @@ public class EdcMfaSettingsResource implements org.keycloak.services.resource.Re
   }
 
   private Response verifyTelegram(UserModel user, RealmModel realm) {
-    AuthState state = AuthStateSession.get(session, scanKey(user));
+    AuthState state = AuthStateSession.get(scanKey(user));
     if (state == null) {
       log.infof("method=verifyTelegram user=%s scanKey=%s message=NoStoredState",
           user.getUsername(), scanKey(user));
@@ -443,11 +443,11 @@ public class EdcMfaSettingsResource implements org.keycloak.services.resource.Re
     EdcTelegramLink.Outcome outcome = EdcTelegramLink.apply(session, realm, user, state);
     if (outcome != EdcTelegramLink.Outcome.LINKED) {
       if (outcome == EdcTelegramLink.Outcome.EXPIRED) {
-        AuthStateSession.remove(session, scanKey(user));
+        AuthStateSession.remove(scanKey(user));
       }
       return uncached(EdcTelegramLink.statusOf(outcome), EdcTelegramLink.problem(outcome));
     }
-    AuthStateSession.remove(session, scanKey(user));
+    AuthStateSession.remove(scanKey(user));
     EdcEnrolmentState.markComplete(session, user, CHANNEL_TELEGRAM);
     return json(Map.of("status", "ok", "channel", CHANNEL_TELEGRAM));
   }
@@ -472,7 +472,7 @@ public class EdcMfaSettingsResource implements org.keycloak.services.resource.Re
       throw new NotAuthorizedException("Bearer token required");
     }
 
-    AuthState state = AuthStateSession.get(session, scanKey(user));
+    AuthState state = AuthStateSession.get(scanKey(user));
     if (state == null) {
       // Distinguishable from an expiry on purpose: "never started" and "expired" used to answer
       // identically, so a page that had written the state and could not read it back was reported
@@ -483,7 +483,7 @@ public class EdcMfaSettingsResource implements org.keycloak.services.resource.Re
           Map.of("status", "NO_SCAN", "error", "No scan is in progress for this account"));
     }
     if (state.isExpired()) {
-      AuthStateSession.remove(session, scanKey(user));
+      AuthStateSession.remove(scanKey(user));
 log.infof("method=telegramScan user=%s scanKey=%s stateId=%s message=Expired",
           user.getUsername(), scanKey(user), state.getId());
       return uncached(Response.Status.GONE.getStatusCode(),
