@@ -4,9 +4,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.khalibre.keycloak.provider.edc.EdcChallengeToken;
 import com.khalibre.keycloak.provider.edc.EdcChannelDetector;
-import com.khalibre.keycloak.provider.edc.EdcTelegramLink;
 import com.khalibre.keycloak.provider.edc.EdcMfaChannelsAuthenticator;
 import com.khalibre.keycloak.provider.edc.EdcOtpDelivery;
+import com.khalibre.keycloak.provider.edc.EdcTelegramLink;
 import com.khalibre.keycloak.provider.privacyIdea.service.PrivacyIdeaService;
 import com.khalibre.keycloak.provider.telegram.state.AuthState;
 import com.khalibre.keycloak.provider.telegram.state.AuthStateSession;
@@ -128,66 +128,6 @@ public class PrivacyIdeaWebhookResource implements RealmResourceProvider {
     return diff == 0;
   }
 
-  @POST
-  @Path("/ipn")
-  @Consumes(MediaType.APPLICATION_JSON)
-  public Response processIpn(@QueryParam("secret") String secret, String body) {
-    if (!secretValid(secret)) {
-      log.warn("method=processIpn status=UNAUTHORIZED message=Invalid or missing secret");
-      return Response.status(Response.Status.UNAUTHORIZED).build();
-    }
-
-    String username = extractUsername(body);
-    if (username == null || username.isBlank()) {
-      log.warn("method=processIpn message=Missing or null username in payload");
-      return Response.status(Response.Status.BAD_REQUEST).build();
-    }
-
-    RealmModel realm = session.getContext().getRealm();
-
-    UserModel user = session.users().getUserByUsername(realm, username);
-    if (user == null) {
-      user = session.users().getUserByEmail(realm, username);
-    }
-
-    if (user == null || !user.isEnabled()) {
-      log.warnf("method=processIpn message=User not found or disabled username=%s", username);
-      return Response.status(Response.Status.NOT_FOUND).build();
-    }
-
-    try {
-      PrivacyIdeaService service = new PrivacyIdeaService(baseUrl, adminUsername, adminPassword);
-      String adminAuthToken = service.getPrivacyIdeaAuthToken();
-      if (adminAuthToken == null || adminAuthToken.isBlank()) {
-        log.error("method=processIpn message=Failed to acquire admin token from privacyIDEA");
-        return Response.status(Response.Status.INTERNAL_SERVER_ERROR).build();
-      }
-
-      String tokenSerial = service.getSpassTokenSerial(username, adminAuthToken);
-      if (tokenSerial == null || tokenSerial.isBlank()) {
-        // Not an error: the user may authenticate with an authenticator app or push token, which
-        // generate their own codes. A 404 here would be recorded as a failed webhook by
-        // privacyIDEA on every such login, so report success-with-nothing-to-deliver instead.
-        log.infof("method=processIpn status=SKIPPED username=%s "
-            + "message=NoActiveSpassTokenDeliveringNothing", username);
-        return Response.ok(Map.of("status", "skipped", "reason", "no-active-spass-token", "username",
-            username), MediaType.APPLICATION_JSON).build();
-      }
-
-      issueOtp(realm, user, tokenSerial, adminAuthToken, extractClientIp(body));
-
-      log.infof("method=processIpn status=SUCCESS username=%s serial=%s", username, tokenSerial);
-      // Must carry an entity: Keycloak rejects a body-less response with status 200, see
-      // DefaultSecurityHeadersProvider#isEmptyMediaTypeAllowed, which turns it into a 500.
-      return Response.ok(Map.of("status", "ok", "username", username), MediaType.APPLICATION_JSON)
-          .build();
-
-    } catch (Exception e) {
-      log.error("method=processIpn status=ERROR username=" + username, e);
-      return Response.status(Response.Status.INTERNAL_SERVER_ERROR).build();
-    }
-  }
-
   /**
    * Regenerates the SPASS PIN for the token and delivers the code over every channel the user has.
    *
@@ -195,8 +135,9 @@ public class PrivacyIdeaWebhookResource implements RealmResourceProvider {
    */
   private String issueOtp(RealmModel realm, UserModel user, String tokenSerial,
       String adminAuthToken, String clientIp) throws Exception {
-    // Shared with MFA enrolment, which enrols an email channel and has to deliver to it the same
-    // way sign-in does. Two copies would be two places for the mail and the bot message to drift.
+    // Now only /resend uses this. Sign-in issues its own code from edc-mfa-channels, and enrolment
+    // calls EdcOtpDelivery.issue directly, so this is a thin wrapper over the one implementation
+    // rather than a second delivery path.
     return EdcOtpDelivery.issue(session, realm, user, settings,
         new PrivacyIdeaService(baseUrl, adminUsername, adminPassword), adminAuthToken,
         tokenSerial, clientIp);

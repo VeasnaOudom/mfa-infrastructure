@@ -43,8 +43,8 @@ Generated MariaDB config is written to `config/mariadb/conf.d/`. The generated r
 
 `mise run start` brings the stack up, but the PrivacyIDEA OTP flow needs one-off configuration on both
 Keycloak and privacyIDEA before it will authenticate anyone: an authentication flow with two custom
-authenticators, a privacyIDEA resolver and a webhook event handler, and a shared secret that has to
-match in three places.
+authenticators, a privacyIDEA resolver, and a shared secret that has to match in two places. There is
+no privacyIDEA event handler to configure — code delivery happens inside Keycloak.
 
 **[docs/otp-flow-setup.md](docs/otp-flow-setup.md)** — step-by-step setup for both systems, plus how to
 verify it without needing a real user's credentials.
