@@ -2,13 +2,11 @@ package com.khalibre.keycloak.provider.telegram.idp;
 
 import static com.khalibre.keycloak.provider.telegram.idp.TelegramIdentityProviderFactory.AUTO_LINK_BY_PHONE_NUMBER_KEY;
 
+import com.khalibre.keycloak.provider.edc.EdcChannelDetector;
 import com.khalibre.keycloak.provider.telegram.bot.TelegramNotifier;
 import com.khalibre.keycloak.provider.telegram.state.AuthState;
 import com.khalibre.keycloak.provider.telegram.state.AuthStateSession;
 import com.khalibre.keycloak.provider.util.FederatedIdentity;
-import com.khalibre.keycloak.provider.edc.EdcChannelDetector;
-import org.jboss.logging.Logger;
-
 import jakarta.annotation.Nonnull;
 import jakarta.ws.rs.GET;
 import jakarta.ws.rs.Path;
@@ -21,6 +19,7 @@ import jakarta.ws.rs.core.UriInfo;
 import java.net.URI;
 import java.util.Iterator;
 import java.util.stream.Stream;
+import org.jboss.logging.Logger;
 import org.keycloak.broker.oidc.OAuth2IdentityProviderConfig;
 import org.keycloak.broker.provider.AbstractIdentityProvider;
 import org.keycloak.broker.provider.AuthenticationRequest;
@@ -201,6 +200,7 @@ public class TelegramIdentityProvider extends
         boolean isLinkMode = authSession.getAuthNote("LINKING_IDENTITY_PROVIDER") != null;
 
         String autoLinkUsername;
+        String tgUserId = auth.getTelegramUserId();
         if (isLinkMode) {
           UserModel authenticatedUser = findAuthenticatedUser(authSession);
           if (authenticatedUser == null
@@ -210,12 +210,11 @@ public class TelegramIdentityProvider extends
           }
           // One Telegram account belongs to one person. Without this, scanning the same phone from a
           // second account links it too, and both accounts then receive codes at the same chat.
-          UserModel otherHolder = EdcChannelDetector.anotherUserHolding(session,
-            session.getContext().getRealm(), authenticatedUser, auth.getTelegramUserId());
+          UserModel otherHolder = EdcChannelDetector.anotherUserHolding(session, authenticatedUser,
+            tgUserId);
           if (otherHolder != null) {
             log.warnf("method=authenticate chat=%s targetUser=%s alreadyHeldBy=%s "
-                + "message=TelegramAlreadyLinked",
-                auth.getTelegramUserId(), authenticatedUser.getUsername(),
+                + "message=TelegramAlreadyLinked", tgUserId, authenticatedUser.getUsername(),
                 otherHolder.getUsername());
             return telegramRejected(sessionId, auth, "telegram.link-already-linked");
           }
@@ -226,7 +225,8 @@ public class TelegramIdentityProvider extends
 
         AuthStateSession.remove(session, sessionId);
 
-        boolean accountLinked = isAccountLinked(provider.getConfig().getAlias(), auth);
+        boolean accountLinked = FederatedIdentity.isTelegramLinked(session,
+          provider.getConfig().getAlias(), tgUserId);
         if (accountLinked || autoLinkUsername != null) {
           sendToTelegram(auth, isLinkMode ? "telegram.link-success" : "telegram.login-success");
         } else {
@@ -234,7 +234,7 @@ public class TelegramIdentityProvider extends
         }
 
         BrokeredIdentityContext context = buildContext(
-          auth.getTelegramUserId(),
+          tgUserId,
           autoLinkUsername,
           auth.getUsername(),
           auth.getFirstName(),
@@ -253,16 +253,6 @@ public class TelegramIdentityProvider extends
       // Delegated rather than kept here: the MFA link path needs the same lookup-and-send, and two
       // copies of a bot-token lookup is two places for a masked token to be handled differently.
       TelegramNotifier.send(session, auth == null ? null : auth.getTelegramUserId(), messageKey);
-    }
-
-    private boolean isAccountLinked(String alias, AuthState state) {
-      if (state.getTelegramUserId() == null) {
-        return false;
-      }
-
-      return FederatedIdentity.isTelegramChatLinked(session,
-        session.getContext().getRealm(), alias,
-        state.getTelegramUserId());
     }
 
     private UserModel findAuthenticatedUser(AuthenticationSessionModel authSession) {

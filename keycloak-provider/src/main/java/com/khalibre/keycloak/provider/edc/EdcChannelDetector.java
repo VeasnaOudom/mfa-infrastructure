@@ -5,9 +5,8 @@ import com.khalibre.keycloak.provider.util.FederatedIdentity;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Stream;
 import java.util.regex.Pattern;
-
+import java.util.stream.Stream;
 import org.jboss.logging.Logger;
 import org.keycloak.broker.oidc.OAuth2IdentityProviderConfig;
 import org.keycloak.models.FederatedIdentityModel;
@@ -20,10 +19,10 @@ import org.keycloak.models.UserModel;
  * Works out which MFA channels a user can actually receive a code on: an active privacyIDEA SPASS
  * token enables Email, an active HOTP/TOTP token enables the authenticator app, and a linked
  * Telegram account enables Telegram.
- *
+ * <p>
  * Shared by the authenticator (which writes the result into authentication-session notes) and the
  * channels endpoint, so the page and the flow can never disagree.
- *
+ * <p>
  * Every lookup is best-effort: a privacyIDEA outage must not block sign-in, so failures degrade to
  * "channel unavailable".
  */
@@ -31,13 +30,17 @@ public final class EdcChannelDetector {
 
   private static final Logger log = Logger.getLogger(EdcChannelDetector.class);
 
-  /** Keycloak user attributes written when a Telegram account is linked. */
+  /**
+   * Keycloak user attributes written when a Telegram account is linked.
+   */
   public static final String TELEGRAM_USER_ID_ATTR = "telegram-user-id";
   public static final String TELEGRAM_USERNAME_ATTR = "telegram-username";
   public static final String TELEGRAM_FIRST_NAME_ATTR = "telegram-first-name";
   public static final String TELEGRAM_LAST_NAME_ATTR = "telegram-last-name";
 
-  /** Alias of the Telegram identity provider whose links make the channel available. */
+  /**
+   * Alias of the Telegram identity provider whose links make the channel available.
+   */
   public static final String TELEGRAM_IDP_ALIAS = "telegram";
 
   /**
@@ -54,19 +57,23 @@ public final class EdcChannelDetector {
    * by a masked or placeholder value, which is how an unconfigured realm usually looks.
    */
   static final Pattern BOT_TOKEN_PATTERN =
-      Pattern.compile("^\\d{5,}:[A-Za-z0-9_-]{35}$");
+    Pattern.compile("^\\d{5,}:[A-Za-z0-9_-]{35}$");
 
   private EdcChannelDetector() {
   }
 
-  /** Whether a value has the shape of a Telegram bot token. Null-safe. */
+  /**
+   * Whether a value has the shape of a Telegram bot token. Null-safe.
+   */
   static boolean looksLikeBotToken(String token) {
     return token != null && BOT_TOKEN_PATTERN.matcher(token).matches();
   }
 
-  /** @return channel flags keyed by the note names the template and endpoint exchange */
+  /**
+   * @return channel flags keyed by the note names the template and endpoint exchange
+   */
   public static Map<String, String> detect(KeycloakSession session, PrivacyIdeaService privacyIdea,
-      UserModel user) {
+    UserModel user) {
     Map<String, String> channels = new LinkedHashMap<>();
     channels.put(EdcMfaChannelsAuthenticator.NOTE_EMAIL, "0");
     channels.put(EdcMfaChannelsAuthenticator.NOTE_TOTP, "0");
@@ -79,10 +86,10 @@ public final class EdcChannelDetector {
       return channels;
     }
     detectTelegram(session, user, channels);
-    detectPrivacyIdeaTokens(session, privacyIdea, user, channels);
+    detectPrivacyIdeaTokens(privacyIdea, user, channels);
     suppressUndeliverableTelegram(user, channels);
     channels.put(EdcMfaChannelsAuthenticator.NOTE_ENROLMENT_REQUIRED,
-        hasNoUsableChannel(channels) ? "1" : "0");
+      hasNoUsableChannel(channels) ? "1" : "0");
     return channels;
   }
 
@@ -103,14 +110,14 @@ public final class EdcChannelDetector {
    * safe direction to be wrong in.
    */
   private static void suppressUndeliverableTelegram(UserModel user,
-      Map<String, String> channels) {
+    Map<String, String> channels) {
     if (!withdrawUndeliverableTelegram(channels)) {
       return;
     }
     log.infof("method=suppressUndeliverableTelegram user=%s "
         + "message=Telegram is linked but privacyIDEA holds no token to deliver a code, "
         + "so the channel is withdrawn and enrolment is owed again",
-        user == null ? null : user.getUsername());
+      user == null ? null : user.getUsername());
   }
 
   /**
@@ -145,9 +152,9 @@ public final class EdcChannelDetector {
    */
   static boolean hasNoUsableChannel(Map<String, String> channels) {
     return !isOn(channels, EdcMfaChannelsAuthenticator.NOTE_TELEGRAM)
-        && !isOn(channels, EdcMfaChannelsAuthenticator.NOTE_EMAIL)
-        && !isOn(channels, EdcMfaChannelsAuthenticator.NOTE_TOTP)
-        && !isOn(channels, EdcMfaChannelsAuthenticator.NOTE_BACKUP_CODE);
+      && !isOn(channels, EdcMfaChannelsAuthenticator.NOTE_EMAIL)
+      && !isOn(channels, EdcMfaChannelsAuthenticator.NOTE_TOTP)
+      && !isOn(channels, EdcMfaChannelsAuthenticator.NOTE_BACKUP_CODE);
   }
 
   private static boolean isOn(Map<String, String> channels, String note) {
@@ -168,7 +175,8 @@ public final class EdcChannelDetector {
    * the user's phone, where no explanation can be shown to them, so it is caught here instead.
    */
   public static boolean isTelegramConfigured(KeycloakSession session) {
-    if (session == null || session.getContext() == null || session.getContext().getRealm() == null) {
+    if (session == null || session.getContext() == null
+      || session.getContext().getRealm() == null) {
       return false;
     }
     try {
@@ -183,8 +191,8 @@ public final class EdcChannelDetector {
       }
       if (!looksLikeBotToken(botToken)) {
         log.warnf("method=isTelegramConfigured bot=%s reason=NotABotToken "
-            + "message=Set clientSecret on the telegram identity provider to the token BotFather gave "
-            + "you; Telegram will not be offered until then", botUsername);
+          + "message=Set clientSecret on the telegram identity provider to the token BotFather gave "
+          + "you; Telegram will not be offered until then", botUsername);
         return false;
       }
       return true;
@@ -223,20 +231,19 @@ public final class EdcChannelDetector {
    * federated-identity row is managed by Keycloak itself and survives LDAP sync.
    */
   private static void detectTelegram(KeycloakSession session, UserModel user,
-      Map<String, String> channels) {
+    Map<String, String> channels) {
     String chatId = telegramChatId(session, user);
     if (chatId == null) {
       return;
     }
-    RealmModel realm = session.getContext().getRealm();
-    UserModel other = anotherUserHolding(session, realm, user, chatId);
+    UserModel other = anotherUserHolding(session, user, chatId);
     if (other != null) {
       // Two accounts claiming one Telegram chat. Codes for either of them would be delivered to
       // the same phone, so neither may be told the channel is theirs. Logged loudly because it means
       // the link guard was bypassed somewhere, and this is the state that must be repaired by hand.
       log.errorf("method=detectTelegram user=%s chat=%s alsoHeldBy=%s "
           + "message=Two accounts claim one Telegram account; refusing the channel for both",
-          user.getUsername(), chatId, other.getUsername());
+        user.getUsername(), chatId, other.getUsername());
       return;
     }
     channels.put(EdcMfaChannelsAuthenticator.NOTE_TELEGRAM, "1");
@@ -247,7 +254,7 @@ public final class EdcChannelDetector {
       handle = telegramUsername(session, user);
     }
     channels.put(EdcMfaChannelsAuthenticator.NOTE_TELEGRAM_HANDLE,
-        handle == null || handle.isBlank() ? chatId : handle);
+      handle == null || handle.isBlank() ? chatId : handle);
     // Without this the page would advertise a channel the sender cannot deliver to.
     channels.put(EdcMfaChannelsAuthenticator.NOTE_MASKED, "1");
   }
@@ -263,44 +270,49 @@ public final class EdcChannelDetector {
    *
    * @return the other user, or {@code null} when this is the only claimant
    */
-  public static UserModel anotherUserHolding(KeycloakSession session, RealmModel realm,
-      UserModel user, String chatId) {
-    if (session == null || realm == null || user == null || chatId == null || chatId.isBlank()) {
+  public static UserModel anotherUserHolding(KeycloakSession session, UserModel user,
+    String chatId) {
+    if (session == null) {
+      return null;
+    }
+    RealmModel realm = session.getContext().getRealm();
+    if (realm == null || user == null || chatId == null || chatId.isBlank()) {
       return null;
     }
     try {
-      UserModel owner = FederatedIdentity.getUserByTelegramChat(session, realm,
-          TELEGRAM_IDP_ALIAS, chatId);
+      UserModel owner = FederatedIdentity.getUserByTelegram(session, TELEGRAM_IDP_ALIAS, chatId);
       if (owner != null && !owner.getId().equals(user.getId())) {
         return owner;
       }
       try (Stream<UserModel> claimants =
-          session.users().searchForUserByUserAttributeStream(realm, TELEGRAM_USER_ID_ATTR, chatId)) {
+        session.users().searchForUserByUserAttributeStream(realm, TELEGRAM_USER_ID_ATTR, chatId)) {
         return claimants
-            .filter(candidate -> !candidate.getId().equals(user.getId()))
-            .findFirst()
-            .orElse(null);
+          .filter(candidate -> !candidate.getId().equals(user.getId()))
+          .findFirst()
+          .orElse(null);
       }
     } catch (Exception e) {
       log.warnf("method=anotherUserHolding user=%s chat=%s error=%s", user.getUsername(), chatId,
-          e.getMessage());
+        e.getMessage());
       return null;
     }
   }
 
-  /** The @username of the linked Telegram account, or {@code null} if it has none. */
+  /**
+   * The @username of the linked Telegram account, or {@code null} if it has none.
+   */
   static String telegramUsername(KeycloakSession session, UserModel user) {
     if (session == null || session.getContext().getRealm() == null) {
       return null;
     }
     try {
       return session.users()
-          .getFederatedIdentitiesStream(session.getContext().getRealm(), user)
-          .filter(id -> TELEGRAM_IDP_ALIAS.equals(id.getIdentityProvider()))
-          .map(FederatedIdentityModel::getUserName)
-          .filter(name -> name != null && !name.isBlank())
-          .findFirst()
-          .orElse(null);
+        .getFederatedIdentitiesStream(session.getContext().getRealm(), user)
+        .filter(id -> TELEGRAM_IDP_ALIAS.equals(id.getIdentityProvider()))
+        .map(FederatedIdentityModel::getUserName)
+        .filter(name -> name != null && !name.isBlank())
+        .findFirst()
+        .orElse(null);
     } catch (Exception e) {
       log.warnf("method=telegramUsername user=%s error=%s", user.getUsername(), e.getMessage());
       return null;
@@ -309,7 +321,7 @@ public final class EdcChannelDetector {
 
   /**
    * @return the Telegram chat id of the user's linked Telegram account, or {@code null} when not
-   *         linked or the stored identity does not carry a usable Telegram id
+   * linked or the stored identity does not carry a usable Telegram id
    */
   public static String telegramChatId(KeycloakSession session, UserModel user) {
     String attribute = user.getFirstAttribute(TELEGRAM_USER_ID_ATTR);
@@ -321,20 +333,20 @@ public final class EdcChannelDetector {
     }
     try {
       return session.users()
-          .getFederatedIdentitiesStream(session.getContext().getRealm(), user)
-          .filter(id -> TELEGRAM_IDP_ALIAS.equals(id.getIdentityProvider()))
-          .map(FederatedIdentityModel::getUserId)
-          .filter(id -> id != null && !id.isBlank())
-          .findFirst()
-          .orElse(null);
+        .getFederatedIdentitiesStream(session.getContext().getRealm(), user)
+        .filter(id -> TELEGRAM_IDP_ALIAS.equals(id.getIdentityProvider()))
+        .map(FederatedIdentityModel::getUserId)
+        .filter(id -> id != null && !id.isBlank())
+        .findFirst()
+        .orElse(null);
     } catch (Exception e) {
       log.warnf("method=telegramChatId user=%s error=%s", user.getUsername(), e.getMessage());
       return null;
     }
   }
 
-  private static void detectPrivacyIdeaTokens(KeycloakSession session,
-      PrivacyIdeaService privacyIdea, UserModel user, Map<String, String> channels) {
+  private static void detectPrivacyIdeaTokens(PrivacyIdeaService privacyIdea, UserModel user,
+    Map<String, String> channels) {
     if (privacyIdea == null) {
       log.warn("method=detectPrivacyIdeaTokens reason=serviceNotConfigured");
       return;

@@ -253,14 +253,14 @@ public class TelegramAuthResource implements RealmResourceProvider {
         .build();
     }
 
-    boolean accountLinked = isAccountLinked(alias, state);
+    String tgUserId = state.getTelegramUserId();
+    boolean accountLinked = FederatedIdentity.isTelegramLinked(session, alias, tgUserId);
     boolean phoneRequired = !accountLinked;
     if (!phoneRequired) {
       state.setStatus("COMPLETED");
       AuthStateCache.store(state.getId(), state);
     } else if (!state.isPhoneNumberRequested()) {
-      String chatId = state.getTelegramUserId();
-      if (chatId == null) {
+      if (tgUserId == null) {
         // The bot has not seen the /start command yet, so there is nobody to prompt. A 500 here
         // reads as "the server is broken" in the log and makes the enrolment page give up on
         // polling; "not yet" is the honest answer and the page will ask again.
@@ -269,21 +269,12 @@ public class TelegramAuthResource implements RealmResourceProvider {
       LoginFormsProvider formProvider = session.getProvider(LoginFormsProvider.class);
       String message = formProvider.getMessage("telegram.share-phone-number-prompt");
       String buttonText = formProvider.getMessage("telegram.share-phone-number-button");
-      new TelegramBotClient(botToken).requestPhoneNumber(chatId, message, buttonText);
+      new TelegramBotClient(botToken).requestPhoneNumber(tgUserId, message, buttonText);
       state.setPhoneNumberRequested(true);
       AuthStateCache.store(state.getId(), state);
     }
 
     return Response.ok(Map.of("phoneRequired", phoneRequired, "scanned", true)).build();
-  }
-
-  private boolean isAccountLinked(String alias, AuthState state) {
-    if (state.getTelegramUserId() == null) {
-      return false;
-    }
-
-    return FederatedIdentity.isTelegramChatLinked(session,
-      session.getContext().getRealm(), alias, state.getTelegramUserId());
   }
 
   @Override

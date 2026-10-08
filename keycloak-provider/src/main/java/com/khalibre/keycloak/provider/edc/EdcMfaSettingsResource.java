@@ -464,7 +464,6 @@ public class EdcMfaSettingsResource implements org.keycloak.services.resource.Re
     if (user == null) {
       throw new NotAuthorizedException("Bearer token required");
     }
-    RealmModel realm = session.getContext().getRealm();
 
     AuthState state = AuthStateSession.get(session, scanKey(user));
     if (state == null) {
@@ -488,7 +487,7 @@ log.infof("method=telegramScan user=%s scanKey=%s stateId=%s message=Expired",
         state.getTelegramUserId());
 
     boolean linkedToSomeoneElse = state.getTelegramUserId() != null
-        && FederatedIdentity.isTelegramChatLinked(session, realm,
+        && FederatedIdentity.isTelegramLinked(session,
             EdcChannelDetector.TELEGRAM_IDP_ALIAS, state.getTelegramUserId());
     if (!linkedToSomeoneElse && !state.isPhoneNumberRequested()) {
       askBotForPhoneNumber(user, state);

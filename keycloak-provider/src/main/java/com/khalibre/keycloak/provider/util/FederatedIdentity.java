@@ -24,30 +24,37 @@ public final class FederatedIdentity {
   }
 
   /**
-   * The user holding a federated identity for {@code chatId} under the identity provider
+   * The user holding a federated identity for {@code tgUserId} under the identity provider
    * identified by {@code alias}.
+   *
+   * <p>The realm is taken from the session's context rather than passed in, because every caller
+   * already has a session and the two would otherwise have to agree. A session with no realm
+   * (a plain REST request, for example) resolves to {@code null} and the lookup answers
+   * {@code null} rather than throwing.
    *
    * @return the owner, or {@code null} when no account claims this chat
    */
-  public static UserModel getUserByTelegramChat(KeycloakSession session, RealmModel realm,
-    String alias, String chatId) {
-    if (session == null || realm == null || alias == null || chatId == null || chatId.isBlank()) {
+  public static UserModel getUserByTelegram(KeycloakSession session, String alias,
+    String tgUserId) {
+    if (session == null || alias == null || tgUserId == null || tgUserId.isBlank()) {
       return null;
     }
-    return session.users()
-      .getUserByFederatedIdentity(realm, federatedIdentity(alias, chatId));
+    RealmModel realm = session.getContext().getRealm();
+    if (realm == null) {
+      return null;
+    }
+    return session.users().getUserByFederatedIdentity(realm, federatedIdentity(alias, tgUserId));
   }
 
   /**
-   * Whether any account holds a federated identity for {@code chatId} under the identity provider
+   * Whether any account holds a federated identity for {@code tgUserId} under the identity provider
    * identified by {@code alias}.
    *
-   * <p>Convenience over {@link #getUserByTelegramChat} for the boolean callers, which were the
+   * <p>Convenience over {@link #getUserByTelegram} for the boolean callers, which were the
    * majority of the duplicated code.
    */
-  public static boolean isTelegramChatLinked(KeycloakSession session, RealmModel realm,
-    String alias, String chatId) {
-    return getUserByTelegramChat(session, realm, alias, chatId) != null;
+  public static boolean isTelegramLinked(KeycloakSession session, String alias, String tgUserId) {
+    return getUserByTelegram(session, alias, tgUserId) != null;
   }
 
   private static FederatedIdentityModel federatedIdentity(String alias, String chatId) {

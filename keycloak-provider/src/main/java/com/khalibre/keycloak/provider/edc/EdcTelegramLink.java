@@ -77,9 +77,9 @@ public final class EdcTelegramLink {
     String alias = EdcChannelDetector.TELEGRAM_IDP_ALIAS;
     String chatId = state.getTelegramUserId();
 
-    UserModel owner = FederatedIdentity.getUserByTelegramChat(session, realm, alias, chatId);
+    UserModel owner = FederatedIdentity.getUserByTelegram(session, alias, chatId);
     if (owner == null) {
-      owner = EdcChannelDetector.anotherUserHolding(session, realm, user, chatId);
+      owner = EdcChannelDetector.anotherUserHolding(session, user, chatId);
     }
     if (owner != null && !owner.getId().equals(user.getId())) {
       log.warnf("method=apply user=%s chat=%s alsoHeldBy=%s message=TelegramAlreadyLinked",
