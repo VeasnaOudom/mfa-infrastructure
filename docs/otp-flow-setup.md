@@ -15,22 +15,25 @@ either side can be finished.
 
 1. Keycloak — realm, SMTP, client for the resolver
 2. privacyIDEA — resolver pointing at that client
-3. Generate the shared webhook secret and put it in **three** places
+3. Generate the shared secret and put it in **two** places
 4. Keycloak — authentication flow and both authenticator configs
-5. privacyIDEA — event handler posting to `/ipn`
-6. Per user — enroll a token
+5. Per user — enroll a token
+
+There is **no privacyIDEA event handler to configure.** Delivery happens inside
+`edc-mfa-channels`, which writes the PIN and sends it before the OTP step; there was once a WebHook
+handler posting to `/ipn` beside it, and it is gone. See `AGENTS.md` → *Codes were deliverable exactly
+once per token*.
 
 ---
 
 ## 1. The shared secret
 
-One value, three locations. All three must be byte-identical.
+One value, two locations. Both must be byte-identical.
 
 | # | Where | Why |
 | --- | --- | --- |
 | 1 | `webhookSecret` on the **EDC MFA Channels** authenticator config | what Keycloak expects |
 | 2 | `PRIVACYIDEA_WEBHOOK_SECRET` in `.env` | fallback source, also used by the compose env |
-| 3 | the `URL` option of the **privacyIDEA** event handler | what privacyIDEA sends |
 
 Generate one:
 
@@ -38,13 +41,17 @@ Generate one:
 python3 -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
 
+The field is still called `webhookSecret` even though the webhook is gone. What it signs now is the
+`EdcChallengeToken` browser cookie, which is what authorises `GET /channels`,
+`POST /enrolment/telegram-link` and `POST /resend` — remove it and the whole MFA flow stops.
+
 Resolution order in `PrivacyIdeaSettings` is **admin config first, then environment variable**, so
-location 1 wins if they disagree. A mismatch is not silent — `/ipn` answers `401` and logs
-`method=secretValid status=REJECTED`.
+location 1 wins if they disagree. A mismatch is not silent: `POST /resend?secret=` answers `401` and
+logs `method=secretValid status=REJECTED`.
 
 > An empty secret used to mean "skip the check". It now fails closed: with no secret configured every
-> `/ipn` request is rejected. If you add `PRIVACYIDEA_WEBHOOK_SECRET` to `.env.j2` and regenerate
-> before seeding Vault, expect `401` until the Vault key exists.
+> `POST /resend?secret=` is rejected **and** no challenge cookie can be verified, so `/channels`
+> answers `401` too. Seed it before you start the stack.
 
 ---
 
@@ -181,7 +188,7 @@ read, exported or repurposed without affecting who is let in.
 | `piBaseUrl` | `http://mfa-privacyidea:8080` | internal, for server-to-server calls |
 | `piAdminUsername` | `admin` | privacyIDEA superuser |
 | `piAdminPassword` | the PI admin password | see §3.0 |
-| `webhookSecret` | see §1 | |
+| `webhookSecret` | see §1 | names the browser challenge cookie signing key |
 | `publicBaseUrl` | `https://keycloak-mfa.crosswired.me` | logo/asset origin in OTP mail |
 | `spassExpiryMinutes` | `5` | code validity **and** the page countdown |
 | `backupCodeCount` | `10` | codes per set, issued automatically at the end of enrolment |
@@ -191,8 +198,8 @@ read, exported or repurposed without affecting who is let in.
 lives and **must outlive the code**, otherwise "Send a new code" breaks at exactly the moment it is
 needed.
 
-`PrivacyIdeaSettings` is the single source of truth: the webhook resource and the channel detector both
-resolve from it, so they cannot drift.
+`PrivacyIdeaSettings` is the single source of truth: the `privacyidea` resource provider and the
+channel detector both resolve from it, so they cannot drift.
 
 ### 2.6 `privacyIDEA` authenticator config
 
@@ -250,35 +257,7 @@ Attribute mapping used here:
 After saving, the privacyIDEA realm must have this resolver assigned, or no user will be found and the
 channel detector will report no channels.
 
-### 3.2 Event handler
-
-**Config → Event Handlers → Create event handler**
-
-| Field | Value |
-| --- | --- |
-| Name | `validate_triggerchallenge` |
-| Event | `validate_triggerchallenge` |
-| Handled module | `WebHook` |
-| Position | `post` |
-| Active | yes |
-
-Options:
-
-| Option | Value |
-| --- | --- |
-| `URL` | `http://mfa-keycloak:8080/realms/EDC/privacyidea/ipn?secret=<shared secret>` |
-| `content_type` | `application/json` |
-| `data` | `{"username": "{logged_in_user}", "client_ip": "{client_ip}"}` |
-| `replace` | `True` |
-
-The realm name in that URL must be **`EDC`**, not `mfa`. privacyIDEA runs inside the Docker network, so
-it uses the internal `mfa-keycloak:8080` address here and the public hostname from a browser or from an
-external host.
-
-privacyIDEA cannot send custom headers, which is why the secret travels as a query parameter rather than
-in an `Authorization` header.
-
-### 3.3 Tokens per user
+### 3.2 Tokens per user
 
 Each user needs at least one enrolled token, or no channel is offered.
 
@@ -286,12 +265,12 @@ Each user needs at least one enrolled token, or no channel is offered.
 
 | Channel | Token type | Serial prefix | Notes |
 | --- | --- | --- | --- |
-| Email / SMS (SPASS) | `spass` | `PISP…` | one-time code pushed by the webhook |
+| Email / SMS (SPASS) | `spass` | `PISP…` | one-time code pushed by `edc-mfa-channels` |
 | Authenticator app | `totp` | `TOTP…` | user scans the QR code |
 | Backup codes | `tan` | `PITN…` | 100 pre-generated single-use 6-digit codes |
 
 Enrolled serials look like `PISP000106D7`, `TOTP0000C201` and `PITN00005935`. The serial is what the OTP
-page submits, and what the webhook is told to trigger.
+page submits, and what `edc-mfa-channels` looks up when it issues a code.
 
 TOTP parameters in use: `timeStep=30`, `timeWindow=180`, hash `sha1`.
 
@@ -312,15 +291,10 @@ browser ──AD credentials──▶ Username Password Form
                                 │  GET  /realms/EDC/privacyidea/channels
                                 │       → which channels this user has
                                 ├──▶ no enrolment required → note 0
-                                └──▶ issues a short-lived signed challenge cookie
+                                ├──▶ issues a short-lived signed challenge cookie
+                                └──▶ issueSignInCode → /token/setpin, then email / Telegram
                           ──▶ Second factor (CONDITIONAL → matches)
                                 └──▶ privacyIDEA authenticator renders the OTP page
-                                       │
-                                       └──▶ on validate, privacyIDEA fires validate_triggerchallenge
-                                             │
-                                             └──▶ WebHook ──▶ POST /ipn?secret=…
-                                                           → triggers the token
-                                                           → emails / sends the code
 user submits code ──────────▶ privacyidea-authenticator ──▶ privacyIDEA /validate/check
 ```
 
@@ -342,8 +316,9 @@ user submits code ──────────▶ privacyidea-authenticator �
 ```
 
 `GET /channels`, `POST /resend` and `POST /enrolment/telegram-link` are served by the same realm
-resource provider at `/realms/EDC/privacyidea/`. They authorise from the signed cookie, not from a
-Keycloak session — a plain REST request cannot see one.
+resource provider at `/realms/EDC/privacyidea/`. The browser authorises from the signed challenge
+cookie, because a plain REST request cannot see a Keycloak authentication session. `/resend` also
+accepts `?secret=` for a trusted server-side caller.
 
 ### Backup codes
 
@@ -498,57 +473,41 @@ rightful owner means deciding who receives someone else's verification codes.
 
 ### 5.1 Without any user credentials
 
-The webhook secret can be checked on its own. `mfa-keycloak:8080` only resolves inside the Docker
-network, so either run these through `docker exec` or use the public hostname.
+There is no longer a credential-free probe for the shared secret, because the endpoint that used to
+provide one (`POST /ipn`) is gone. What can still be checked without an AD account:
+
+**The provider is registered.** A real path answers `401` (no challenge cookie) while an unknown one
+answers `404`. That `401` is the registration check — it proves the `privacyidea` resource provider is
+mounted and reachable, which a `404` would not.
 
 ```bash
 set -a; source .env; set +a
-BASE="https://${KEYCLOAK_HOST}/realms/EDC/privacyidea/ipn"
-BODY='{"username":"<existing user>","serial":"x"}'
+BASE="https://${KEYCLOAK_HOST}/realms/EDC/privacyidea"
 
-# 401 — secret did not match
-curl -sk -o /dev/null -w '%{http_code}\n' -X POST "$BASE?secret=wrong" \
-  -H 'Content-Type: application/json' -d "$BODY"
+# 401 — provider is mounted, caller has no challenge cookie
+curl -sk -o /dev/null -w '%{http_code}\n' "$BASE/channels"
 
-# 401 — no secret supplied
-curl -sk -o /dev/null -w '%{http_code}\n' -X POST "$BASE" \
-  -H 'Content-Type: application/json' -d "$BODY"
+# 404 — no such endpoint, so the 401 above really was the provider answering
+curl -sk -o /dev/null -w '%{http_code}\n' "$BASE/nosuchpath"
 
-# 200 — secret matched and the user resolved
-curl -sk -o /dev/null -w '%{http_code}\n' -X POST "$BASE?secret=$PRIVACYIDEA_WEBHOOK_SECRET" \
-  -H 'Content-Type: application/json' -d "$BODY"
+# 404 — /ipn was deleted; this must NOT come back 401 or 200
+curl -sk -o /dev/null -w '%{http_code}\n' -X POST "$BASE/ipn?secret=$PRIVACYIDEA_WEBHOOK_SECRET"
 ```
 
-Or from inside the stack network, where the internal name resolves:
+`mfa-keycloak:8080` only resolves inside the Docker network, so either run these through `docker exec`
+or use the public hostname as above.
 
-```bash
-docker exec mfa-privacyidea curl -s -o /dev/null -w '%{http_code}\n' \
-  -X POST "http://mfa-keycloak:8080/realms/EDC/privacyidea/ipn?secret=$PRIVACYIDEA_WEBHOOK_SECRET" \
-  -H 'Content-Type: application/json' -d '{"username":"<existing user>","serial":"x"}'
+**The secret is only observable through a real challenge.** It signs the cookie that `/channels`
+verifies, so the honest check is a sign-in that renders the chooser. A misconfigured secret shows up as
+`401` on `/channels` plus this line in the Keycloak log:
+
+```
+WARN  method=channels status=UNAUTHORIZED message=No valid challenge cookie
 ```
 
-Status codes mean what you would expect, and the distinction matters when reading them:
-
-| Request | Status | Means |
-| --- | --- | --- |
-| wrong or missing secret | `401` | secret rejected, nothing else attempted |
-| correct secret, unknown user | `404` | secret is fine; the user did not resolve |
-| correct secret, no `username` | `400` | malformed call |
-| correct secret, existing user | `200` | secret **and** user both resolved |
-
-A `404` on the third call means the secret matched but the username is wrong — a common false alarm when
-copying this. It is still not proof that delivery works, because a bogus serial then fails in business
-logic.
-
-Trigger a real code and read the mail:
-
-```bash
-curl -sk -o /dev/null -X POST "$BASE?secret=$PRIVACYIDEA_WEBHOOK_SECRET" \
-  -H 'Content-Type: application/json' \
-  -d '{"username":"<user>","serial":"<PISP serial>"}'
-
-# then read https://mfa-mail.crosswired.me
-```
+There is no `?secret=` probe worth running: `POST /resend?secret=<wrong>` answers `401` whether the
+secret is wrong *or* correct-and-you-simply-also-lack the cookie, and `?secret=<correct>` with a
+resolved user **actually issues and delivers a real code**. Do not use it as a probe.
 
 Check the generated theme file carries the right public origin:
 
@@ -566,9 +525,12 @@ are safe; temporary **users** are not, because they reach AD.
 ### 5.3 Logs
 
 ```bash
-mise run logs:keycloak      # look for method=processIpn status=UNAUTHORIZED
-mise run logs:privacyidea   # look for webhookeventhandler lines naming /ipn
+mise run logs:keycloak      # look for method=channels status=UNAUTHORIZED, or method=resend status=*
 ```
+
+There is no `method=processIpn` line to look for any more. If you still see `webhookeventhandler`
+output from privacyIDEA naming `/ipn`, a WebHook event handler is still configured there and needs
+deleting.
 
 ---
 
@@ -605,9 +567,10 @@ gets in the way in ways worth writing down:
 
 * `pirealm` / `piservicerealm` on the `privacyidea-authenticator` are still `mfa` — should be `EDC`.
 * `piAdminPassword` is the privacyIDEA superuser; move to a least-privilege service account.
-* `PRIVACYIDEA_WEBHOOK_SECRET` is in `.env` but not in `.env.j2`, so `mise run start` regenerates it
-  empty and the webhook rejects everything until the Vault key
-  (`vault_privacyidea_webhook_secret`) exists.
+* `PRIVACYIDEA_WEBHOOK_SECRET` **is** rendered — `.env.j2` has it, and `privacyidea_webhook_secret`
+  in `ansible/group_vars/all/vars.yml` falls back to a hardcoded literal when
+  `vault_privacyidea_webhook_secret` is unset. So the secret is non-empty in every environment, but it
+  is the *same* non-empty value everywhere until the Vault key is seeded. Seed it, then regenerate.
 * Admin-config values live in the Keycloak database, so a database restored from another environment
   carries that environment's `webhookSecret` and `publicBaseUrl` with no warning.
 * The account console **Signing in** page now manages channels (see above), so a lost backup-code set

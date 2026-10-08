@@ -97,7 +97,7 @@ These are Keycloak/PrivacyIDEA behaviours, not project choices.
 * **Custom SPI registration proved unreliable here.** A hand-built `Provider`/`Spi` pair registered
   correctly in the JAR yet `session.getProvider()` returned null at runtime. The MFA channel
   detector deliberately avoids a custom SPI and builds its `PrivacyIdeaService` directly in its
-  factory, mirroring the webhook resource provider.
+  factory, mirroring the `privacyidea` realm resource provider.
 * **`realm.baseUrl` does not exist in KC 26.** No `getBaseUrl()` on `RealmModel`, no `base_url`
   column. Nor does `UrlBean` expose a bare origin — `resourcesUrl`/`loginUrl` are built from the
   server's own request base URI and therefore contain the **internal** host and port
@@ -109,9 +109,9 @@ These are Keycloak/PrivacyIDEA behaviours, not project choices.
 
 ## This realm's specifics
 
-* **Realm is `EDC`** (renamed from `mfa`). Update anything referencing the old name: privacyIDEA's
-  event handler URL, the privacyIDEA resolver, and `pirealm`/`piservicerealm` on the
-  `privacyidea-authenticator` config.
+* **Realm is `EDC`** (renamed from `mfa`). Update anything referencing the old name: the privacyIDEA
+  resolver, and `pirealm`/`piservicerealm` on the `privacyidea-authenticator` config. There is no
+  longer an event handler URL to update — see *Codes were deliverable exactly once per token*.
 * **Do not generalise from one admin-API test.** Writing `telegram-user-id` through
   `PUT /admin/realms/<realm>/users/{id}` returned HTTP 204 and stored nothing, which looked like
   proof that LDAP federation discards unmapped attributes. It does not: attributes written
@@ -142,8 +142,8 @@ read back through `GET /realms/<realm>/privacyidea/channels`, which renders the 
 `pi-form.js`.
 
 `PrivacyIdeaSettings` is the single source of truth for the privacyIDEA connection settings and
-the webhook secret. Both the webhook resource and the channel detector resolve from it, so they
-cannot drift. It is edited in one place only:
+the shared secret. Both the `privacyidea` resource provider and the channel detector resolve from it,
+so they cannot drift. It is edited in one place only:
 
 ```
 Authentication → Flows → PrivacyIDEA forms → EDC MFA Channels → ⚙ → Config
@@ -324,15 +324,53 @@ that can never be completed.
 ```
 
 `EdcMfaChannelsAuthenticator.issueSignInCode` now writes the PIN and sends it itself, before the OTP
-step, using `EdcOtpDelivery.issue` - the path enrolment and `/resend` already used. Two consequences
-worth knowing:
+step, using `EdcOtpDelivery.issue` - the path enrolment and `/resend` already used. What that left
+behind, and what to expect if you go looking:
 
 * **`triggerchallenge` is still a no-op** after a code is used. Nothing relies on it now, but do not
   read its `0` as a broken integration.
-* **It fires on every sign-in for a user with a SPASS-backed channel** - email *or* Telegram, since
-  both ride the same `spass` token - and never while enrolment is owed, because then the wizard runs
-  instead of the OTP page and a code would arrive with nowhere to enter it. TOTP is skipped: the
-  authenticator app generates its own code.
+* **`/ipn` was deleted, not stubbed.** `/realms/EDC/privacyidea/ipn` is a plain `404` from Keycloak's
+  REST dispatcher — there is no method left to answer it. The privacyIDEA event handler that posted
+  there has been deleted too, so nothing in the stack posts to it any more. Do not go looking for a
+  stub, a `superseded` status, or a `processIpn` log line; none of those exist.
+* **The duplicate delivery was real, and the log shows both halves of it.** Issuing the PIN in the
+  authenticator was meant to *replace* the webhook path, not sit beside it, so for a while every
+  sign-in sent **two** emails and **two** Telegram messages:
+
+  ```
+  09:09:41,962  sendEmail       thread-19   <- edc-mfa-channels
+  09:09:42,938  sendTelegram     thread-19
+  09:09:42,938  issueSignInCode  thread-19
+  09:09:44,992  sendEmail        thread-15   <- privacyIDEA webhook, ~2s later
+  09:09:46,180  sendTelegram     thread-15
+  09:09:46,180  processIpn SUCCESS thread-15
+  ```
+
+  The `thread-15` block is the record of the removed path. `issueSignInCode` runs at priority 11;
+  `privacyidea-authenticator` at priority 12 then calls `/validate/triggerchallenge`, which was what
+  fired the event.
+* **The vendor execution cannot simply be disabled instead.** It is the step that renders the OTP page
+  and validates the code the user types, so the duplicate delivery had to be removed upstream of it.
+* **`issueSignInCode` fires on every sign-in** for a user with a SPASS-backed channel - email *or*
+  Telegram, since both ride the same `spass` token - and never while enrolment is owed, because then
+  the wizard runs instead of the OTP page and a code would arrive with nowhere to enter it. TOTP is
+  skipped: the authenticator app generates its own code.
+* **The shared secret is not dead, and the `webhookSecret` name outlived its purpose.** With `/ipn`
+  gone its only remaining jobs are signing the `EdcChallengeToken` browser cookie and authorising
+  `POST /resend?secret=`. Dropping it would break the whole MFA flow, so do not "clean it up" along
+  with the webhook.
+
+### Leftovers from the removal
+
+Known-dead, still in the tree, safe to clear in a follow-up rather than as part of the removal:
+
+* `config/privacyidea/webhookeventhandler.py` is still bind-mounted over privacyIDEA's own
+  `webhookeventhandler.py`, and `docker-compose.yml` still carries the comment explaining the
+  `content_type` backport. No event handler uses it any more.
+* The admin-console help text on both `webhookSecret` config fields still tells you to match the
+  secret "in the privacyIDEA event handler URL". There is no such URL.
+* `PrivacyIdeaWebhookResource` is no longer a webhook handler. It serves `/channels`, `/resend` and
+  `/enrolment/telegram-link`, and the class name is the only thing about it that is out of date.
 
 ## Two things that survive nothing but a running stack
 
