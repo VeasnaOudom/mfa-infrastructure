@@ -91,6 +91,7 @@ public class EdcMfaSettingsResource implements org.keycloak.services.resource.Re
   private static final String SCAN_KEY_PREFIX = "edc-mfa-settings:scan:";
 
   private final KeycloakSession session;
+  private String callerSessionId;
 
   public EdcMfaSettingsResource(KeycloakSession session) {
     this.session = session;
@@ -645,7 +646,14 @@ log.infof("method=telegramScan user=%s scanKey=%s stateId=%s message=Expired",
   }
 
   private UserModel caller(UriInfo uriInfo, HttpHeaders headers) {
-    return AccountConsoleCaller.resolve(session, uriInfo, headers);
+    callerSessionId = null;
+    AccountConsoleCaller.CallerContext callerContext =
+        AccountConsoleCaller.resolveContext(session, uriInfo, headers);
+    if (callerContext == null) {
+      return null;
+    }
+    callerSessionId = callerContext.sessionId();
+    return callerContext.user();
   }
 
   private PrivacyIdeaSettings.Settings settings() {
@@ -688,6 +696,9 @@ log.infof("method=telegramScan user=%s scanKey=%s stateId=%s message=Expired",
     event.setUserId(user.getId());
     event.setIpAddress(clientIp());
     event.setTime(System.currentTimeMillis());
+    if (callerSessionId != null && !callerSessionId.isBlank()) {
+      event.setSessionId(callerSessionId);
+    }
     if (session.getContext().getClient() != null) {
       event.setClientId(session.getContext().getClient().getClientId());
     }

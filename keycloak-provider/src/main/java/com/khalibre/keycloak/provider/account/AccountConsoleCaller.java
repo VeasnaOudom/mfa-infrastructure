@@ -33,6 +33,9 @@ import jakarta.ws.rs.core.UriInfo;
  */
 public final class AccountConsoleCaller {
 
+  public record CallerContext(UserModel user, String sessionId) {
+  }
+
   private AccountConsoleCaller() {
   }
 
@@ -43,6 +46,12 @@ public final class AccountConsoleCaller {
    *     for the account client, or belongs to a service account
    */
   public static UserModel resolve(KeycloakSession session, UriInfo uriInfo, HttpHeaders headers) {
+    CallerContext context = resolveContext(session, uriInfo, headers);
+    return context == null ? null : context.user();
+  }
+
+  public static CallerContext resolveContext(KeycloakSession session, UriInfo uriInfo,
+      HttpHeaders headers) {
     RealmModel realm = session.getContext().getRealm();
     ClientModel accountClient = realm.getClientByClientId(Constants.ACCOUNT_MANAGEMENT_CLIENT_ID);
     if (accountClient == null || !accountClient.isEnabled()) {
@@ -75,6 +84,6 @@ public final class AccountConsoleCaller {
       return null;
     }
 
-    return authResult.getUser();
+    return new CallerContext(authResult.getUser(), accessToken.getSessionState());
   }
 }
