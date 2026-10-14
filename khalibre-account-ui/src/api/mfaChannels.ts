@@ -6,7 +6,15 @@ export type ChannelId = "telegram" | "totp" | "email" | "backupCode";
 
 /** Per-channel state. `since` and `count` are absent when privacyIDEA did not report them. */
 export type ChannelState = {
+  /**
+   * Whether the channel can be used right now. False both when it was never set up and when ICT has
+   * switched it off for the realm - `configured` and `switchedOff` are what tell those apart.
+   */
   active: boolean;
+  /** Whether the user has this set up, regardless of the realm's policy. */
+  configured: boolean;
+  /** Whether ICT has switched this channel off for the whole realm. */
+  switchedOff: boolean;
   label?: string;
   since?: string;
   count?: number;

@@ -127,10 +127,17 @@ services:
     ports:
       - "5005:5005"   # Debug port
     ##
-    # Add extra hosts for keycloak to resolve to the adfs server
-    ##
-    extra_hosts:
-      - "Window-Server-22.khalibre-ad-lab.crosswired.me:192.168.241.49"
+    # No extra_hosts entry. There used to be one pinning
+    # "Window-Server-22.khalibre-ad-lab.crosswired.me" to 192.168.241.49, a VPN address, so that
+    # Keycloak could reach an Active Directory this deployment has no route to. It made every
+    # sign-in fail as `invalid_user_credentials` - Keycloak validates a password by binding to the
+    # directory, and a bind that cannot connect is reported as a wrong password - which reads as an
+    # auth bug rather than an unreachable server.
+    #
+    # Realm EDC no longer federates to LDAP at all, so nothing needs a directory host. If LDAP is
+    # ever reintroduced, give it the real hostname and let DNS answer: a hard-coded address in
+    # compose is invisible to anyone debugging DNS and silently wrong on every machine but the one
+    # that wrote it.
     volumes:
       - './certs/truststore:/opt/keycloak/certs/truststore:ro'
       - './keycloak-providers:/opt/keycloak/providers'

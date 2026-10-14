@@ -22,6 +22,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.jboss.logging.Logger;
+import org.keycloak.models.ClientModel;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.RealmModel;
 import org.keycloak.models.UserModel;
@@ -72,17 +73,15 @@ public class PrivacyIdeaWebhookResource implements RealmResourceProvider {
   }
 
   /**
-   * privacyIDEA's webhook handler cannot send custom headers, so the shared secret travels as a
-   * query parameter. Compared in constant time. An unconfigured secret fails closed: the endpoint
-   * rejects every request rather than defaulting to open.
-   */
-  /**
-   * Username proven by the signed cookie the OTP page carries, or {@code null}.
+   * Username and client proven by the signed cookie the OTP page carries, or {@code null}.
    *
    * Keycloak only resolves the authentication session for login-action requests, so a plain REST
-   * call cannot see one; the edc-mfa-channels execution issues this cookie instead.
+   * call cannot see one; the edc-mfa-channels execution issues this cookie instead. The client comes
+   * from the same cookie because it is the only record of which application the user is signing in
+   * to that survives to this request, and without it a per-application channel policy is invisible
+   * here - the page would offer a channel that application has switched off.
    */
-  private String challengeCookieUser() {
+  private Challenge challenge() {
     if (webhookSecret.isEmpty()) {
       return null;
     }
@@ -92,19 +91,38 @@ public class PrivacyIdeaWebhookResource implements RealmResourceProvider {
     if (cookie == null) {
       return null;
     }
-    return EdcChallengeToken.verify(cookie.getValue(), webhookSecret, challengeTtlSeconds());
+    EdcChallengeToken.Challenge challenge =
+        EdcChallengeToken.verifyChallenge(cookie.getValue(), webhookSecret, challengeTtlSeconds());
+    if (challenge == null) {
+      return null;
+    }
+    String clientId = challenge.clientId();
+    return new Challenge(challenge.username(),
+        clientId == null ? null : session.getContext().getRealm().getClientByClientId(clientId));
+  }
+
+  /**
+   * The caller and the client whose channel policy governs them.
+   *
+   * <p>Resolved from the challenge cookie on every request, because there is no other record of it
+   * here: a plain REST call has no authentication session and no token of its own.
+   */
+  private record Challenge(String username, ClientModel client) {
   }
 
   private int challengeTtlSeconds() {
     return settings.challengeTtlSeconds();
   }
 
-  private void refreshChallengeCookie(RealmModel realm, String username) {
+  private void refreshChallengeCookie(RealmModel realm, String username, ClientModel client) {
     if (!settings.hasSecret()) {
       return;
     }
-    String token =
-        EdcChallengeToken.issue(username, webhookSecret, challengeTtlSeconds());
+    // The client is carried across, not dropped. The cookie is replaced wholesale, so re-issuing it
+    // without one would quietly reset this browser to the realm default for the rest of the sign-in
+    // - and "send a new code" is exactly when the channel list matters most.
+    String token = EdcChallengeToken.issue(username, client == null ? null : client.getClientId(),
+        webhookSecret, challengeTtlSeconds());
     if (token == null) {
       return;
     }
@@ -112,6 +130,11 @@ public class PrivacyIdeaWebhookResource implements RealmResourceProvider {
         EdcChallengeToken.cookieHeader(realm.getName(), token, challengeTtlSeconds()));
   }
 
+  /**
+   * privacyIDEA's webhook handler cannot send custom headers, so the shared secret travels as a
+   * query parameter. Compared in constant time. An unconfigured secret fails closed: the endpoint
+   * rejects every request rather than defaulting to open.
+   */
   private boolean secretValid(@QueryParam("secret") String supplied) {
     if (webhookSecret.isEmpty()) {
       log.error("method=secretValid status=REJECTED "
@@ -133,12 +156,12 @@ public class PrivacyIdeaWebhookResource implements RealmResourceProvider {
    *
    * @return the freshly issued code
    */
-  private String issueOtp(RealmModel realm, UserModel user, String tokenSerial,
+  private String issueOtp(RealmModel realm, UserModel user, ClientModel client, String tokenSerial,
       String adminAuthToken, String clientIp) throws Exception {
     // Now only /resend uses this. Sign-in issues its own code from edc-mfa-channels, and enrolment
     // calls EdcOtpDelivery.issue directly, so this is a thin wrapper over the one implementation
     // rather than a second delivery path.
-    return EdcOtpDelivery.issue(session, realm, user, settings,
+    return EdcOtpDelivery.issue(session, realm, client, user, settings,
         new PrivacyIdeaService(baseUrl, adminUsername, adminPassword), adminAuthToken,
         tokenSerial, clientIp);
   }
@@ -154,23 +177,24 @@ public class PrivacyIdeaWebhookResource implements RealmResourceProvider {
   @Path("/channels")
   @Produces(MediaType.APPLICATION_JSON)
   public Response channels() {
-    String username = challengeCookieUser();
-    if (username == null || username.isBlank()) {
+    Challenge challenge = challenge();
+    if (challenge == null || challenge.username().isBlank()) {
       log.warn("method=channels status=UNAUTHORIZED message=No valid challenge cookie");
       return Response.status(Response.Status.UNAUTHORIZED).build();
     }
 
     RealmModel realm = session.getContext().getRealm();
-    UserModel user = session.users().getUserByUsername(realm, username);
+    UserModel user = session.users().getUserByUsername(realm, challenge.username());
     if (user == null) {
-      user = session.users().getUserByEmail(realm, username);
+      user = session.users().getUserByEmail(realm, challenge.username());
     }
     if (user == null || !user.isEnabled()) {
       return Response.status(Response.Status.NOT_FOUND).build();
     }
 
+    // Client-scoped, so the rows match the policy that governed the sign-in that issued the code.
     Map<String, String> detected = EdcChannelDetector.detect(session,
-        new PrivacyIdeaService(baseUrl, adminUsername, adminPassword), user);
+        new PrivacyIdeaService(baseUrl, adminUsername, adminPassword), user, challenge.client());
 
     Map<String, Object> channels = new LinkedHashMap<>();
     channels.put("email", "1".equals(detected.get(EdcMfaChannelsAuthenticator.NOTE_EMAIL)));
@@ -222,16 +246,16 @@ public class PrivacyIdeaWebhookResource implements RealmResourceProvider {
   @Consumes(MediaType.APPLICATION_JSON)
   @Produces(MediaType.APPLICATION_JSON)
   public Response linkTelegram() {
-    String username = challengeCookieUser();
-    if (username == null || username.isBlank()) {
+    Challenge challenge = challenge();
+    if (challenge == null || challenge.username().isBlank()) {
       log.warn("method=linkTelegram status=UNAUTHORIZED message=No valid challenge cookie");
       return Response.status(Response.Status.UNAUTHORIZED).build();
     }
 
     RealmModel realm = session.getContext().getRealm();
-    UserModel user = session.users().getUserByUsername(realm, username);
+    UserModel user = session.users().getUserByUsername(realm, challenge.username());
     if (user == null) {
-      user = session.users().getUserByEmail(realm, username);
+      user = session.users().getUserByEmail(realm, challenge.username());
     }
     if (user == null || !user.isEnabled()) {
       return Response.status(Response.Status.NOT_FOUND).build();
@@ -276,12 +300,19 @@ public class PrivacyIdeaWebhookResource implements RealmResourceProvider {
     // Two callers: privacyIDEA's webhook authenticates with the shared secret, while the
     // browser posts from the OTP page and is authorized by its own login session. The secret is
     // never exposed to the page, so it cannot be used there.
+    //
+    // Only the browser path carries a client, because only the browser knows which application the
+    // user is signing in to. The webhook's own resends fall back to the realm policy, which is the
+    // right answer for a caller that never had an application in the first place.
     boolean trustedCaller = secretValid(secret);
-    String username = trustedCaller ? extractUsername(body) : challengeCookieUser();
+    Challenge challenge = trustedCaller ? null : challenge();
+    String username = trustedCaller ? extractUsername(body)
+        : challenge == null ? null : challenge.username();
     if (!trustedCaller && (username == null || username.isBlank())) {
       log.warn("method=resend status=UNAUTHORIZED message=No valid secret or challenge cookie");
       return Response.status(Response.Status.UNAUTHORIZED).build();
     }
+    ClientModel client = challenge == null ? null : challenge.client();
 
     RealmModel realm = session.getContext().getRealm();
     UserModel user = session.users().getUserByUsername(realm, username);
@@ -303,10 +334,10 @@ public class PrivacyIdeaWebhookResource implements RealmResourceProvider {
         return Response.status(Response.Status.NOT_FOUND).build();
       }
 
-      issueOtp(realm, user, tokenSerial, adminAuthToken, extractClientIp(body));
+      issueOtp(realm, user, client, tokenSerial, adminAuthToken, extractClientIp(body));
       // Sliding the window while the user is actively requesting codes, so someone mid-way
       // through an MFA session is not cut off while a code is still valid.
-      refreshChallengeCookie(realm, username);
+      refreshChallengeCookie(realm, username, client);
       log.infof("method=resend status=SUCCESS username=%s serial=%s", username, tokenSerial);
       // The code itself is never echoed back, only the fact that a new one was issued.
       return Response.ok(Map.of("status", "ok"), MediaType.APPLICATION_JSON).build();

@@ -170,7 +170,13 @@ export const MfaChannels = () => {
           </TextContent>
         </div>
 
-        {CHANNEL_ORDER.filter((c) => c === "backupCode" || state?.[c]?.active).map((channel) => (
+        {CHANNEL_ORDER.filter(
+          // `configured` as well as `active`: a channel ICT has switched off is reported inactive, but
+          // the user still has it and needs to see that it was kept rather than deleted. Rendering
+          // only `active` would make an administrator's switch indistinguishable from losing your
+          // setup, which is the one reading guaranteed to send them to the help desk.
+          (c) => c === "backupCode" || state?.[c]?.active || state?.[c]?.configured,
+        ).map((channel) => (
           <ChannelCard
             key={channel}
             channel={channel}
@@ -190,7 +196,7 @@ export const MfaChannels = () => {
           {t("mfaAddHeading")}
         </Title>
 
-        {state && state.available.length === 0 ? (
+        {state && state.available.length === 0 && switchedOffChannels(state).length === 0 ? (
           <div className={styles.emptyRow}>
             <div className={styles.emptyIcon}>
               <ShieldIcon />
@@ -201,24 +207,46 @@ export const MfaChannels = () => {
             </div>
           </div>
         ) : (
-          state?.available.map((channel) => (
-            <button
-              key={channel}
-              type="button"
-              className={styles.addRow}
-              disabled={busy || !state.reachable}
-              onClick={() => onAdd(channel)}
-              data-testid={`mfa-add-${channel}`}
-            >
-              <div className={styles.addIcon}>
-                <ChannelIcon channel={channel} />
-              </div>
-              <div className={styles.addText}>
-                <div className={styles.addTitle}>{t(`mfaChannel.${channel}`)}</div>
-                <div className={styles.addDetail}>{t(`mfaChannelHint.${channel}`)}</div>
-              </div>
-            </button>
-          ))
+          <>
+            {state?.available.map((channel) => (
+              <button
+                key={channel}
+                type="button"
+                className={styles.addRow}
+                disabled={busy || !state.reachable}
+                onClick={() => onAdd(channel)}
+                data-testid={`mfa-add-${channel}`}
+              >
+                <div className={styles.addIcon}>
+                  <ChannelIcon channel={channel} />
+                </div>
+                <div className={styles.addText}>
+                  <div className={styles.addTitle}>{t(`mfaChannel.${channel}`)}</div>
+                  <div className={styles.addDetail}>
+                    {t(`mfaChannelHint.${channel}`)}
+                  </div>
+                </div>
+              </button>
+            ))}
+
+            {state && switchedOffChannels(state).map((channel) => (
+              <button
+                key={channel}
+                type="button"
+                className={styles.addRow}
+                disabled
+                data-testid={`mfa-add-${channel}`}
+              >
+                <div className={styles.addIcon}>
+                  <ChannelIcon channel={channel} />
+                </div>
+                <div className={styles.addText}>
+                  <div className={styles.addTitle}>{t(`mfaChannel.${channel}`)}</div>
+                  <div className={styles.addDetail}>{t("mfaSwitchedOffDetail")}</div>
+                </div>
+              </button>
+            ))}
+          </>
         )}
       </PageSection>
 
@@ -293,6 +321,25 @@ function lastChannel(state: MfaChannelsState, channel: ChannelId): boolean {
   ).some((c) => state[c].active);
 }
 
+/**
+ * Channels that are drawn in the "add" section but cannot be added: ICT has switched them off.
+ *
+ * <p>Kept separate from `available`, never merged into it. Merging is how this section lost its
+ * clickable rows once already - the server's `available` list is the only thing that says "you can
+ * turn this on", and a row that renders the explanation while being inert must not be the same kind
+ * of thing. A channel that is both off and already set up is not here: it renders as a card above,
+ * with the same explanation and its actions disabled.
+ */
+function switchedOffChannels(state: MfaChannelsState | undefined): ChannelId[] {
+  if (!state) {
+    return [];
+  }
+  const addable = new Set<ChannelId>(state.available);
+  return CHANNEL_ORDER.filter(
+    (c) => c !== "backupCode" && !addable.has(c) && state[c].switchedOff && !state[c].configured,
+  );
+}
+
 const ChannelCard = ({
   channel,
   state,
@@ -309,18 +356,38 @@ const ChannelCard = ({
   onRemove: () => void;
 }) => {
   const { t } = useTranslation();
+  // Set up by the user, but ICT has switched the channel off for the realm. Kept and explained rather
+  // than hidden: the tokens are untouched, so this is a pause, not a deletion.
+  //
+  // Backup codes are the exception and deliberately so. ICT's channel switch does not govern them,
+  // and nothing else in the product pretends it does: the enrolment wizard issues them
+  // unconditionally as its last step regardless of policy, `usableBy` refuses to treat them as a
+  // requirement, and POST /channels/backupCode/regenerate has no policy check at all. Gating the one
+  // button on it contradicted all three, and did it at the worst possible moment - a user whose only
+  // remaining route is codes they cannot replace.
+  const disabled = channel !== "backupCode" && state.switchedOff && state.configured;
 
   return (
-    <div className={styles.card} data-testid={`mfa-card-${channel}`}>
+    <div
+      className={`${styles.card} ${disabled ? styles.cardDisabled : ""}`}
+      data-testid={`mfa-card-${channel}`}
+    >
       <div className={styles.cardBody}>
         <div className={styles.cardText}>
           <div className={styles.cardTitle}>
             {t(`mfaChannel.${channel}`)}
-            <span className={`${styles.pill} ${state.active ? "" : styles.pillOff}`}>
-              {state.active ? t("mfaActive") : t("mfaInactive")}
-            </span>
+            {disabled ? (
+              <span className={`${styles.pill} ${styles.pillDisabled}`}>
+                {t("mfaSwitchedOff")}
+              </span>
+            ) : (
+              <span className={`${styles.pill} ${state.active ? "" : styles.pillOff}`}>
+                {state.active ? t("mfaActive") : t("mfaInactive")}
+              </span>
+            )}
           </div>
           <div className={styles.cardDetail}>{describe(channel, state, t)}</div>
+          {disabled && <div className={styles.disabledNote}>{t("mfaSwitchedOffDetail")}</div>}
         </div>
       </div>
 
@@ -328,7 +395,7 @@ const ChannelCard = ({
         {channel === "telegram" && (
           <Button
             variant="secondary"
-            isDisabled={busy}
+            isDisabled={busy || disabled}
             onClick={onReplace}
             data-testid="mfa-replace"
           >
@@ -338,7 +405,7 @@ const ChannelCard = ({
         {channel === "backupCode" ? (
           <Button
             variant="secondary"
-            isDisabled={busy}
+            isDisabled={busy || disabled}
             onClick={onRegenerate}
             data-testid="mfa-regenerate"
           >
@@ -348,7 +415,7 @@ const ChannelCard = ({
           <Button
             variant="link"
             isDanger
-            isDisabled={busy}
+            isDisabled={busy || disabled}
             onClick={onRemove}
             data-testid="mfa-remove"
           >
@@ -367,7 +434,7 @@ function describe(channel: ChannelId, state: ChannelState, t: TFunction) {
       state.count ? t("mfaCodesRemaining", { count: state.count }) : undefined,
       state.since ? t("mfaAdded", { date: formatSince(state.since) }) : undefined,
       t("mfaCodesEachOnce"),
-      t("mfaCodesReplaceOnGenerate"),
+      t("mfaBackupCodesAlwaysAvailable"),
     ];
     return parts.filter(Boolean).join(" · ");
   }

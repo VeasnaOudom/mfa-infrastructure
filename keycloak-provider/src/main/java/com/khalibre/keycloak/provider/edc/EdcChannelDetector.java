@@ -5,10 +5,12 @@ import com.khalibre.keycloak.provider.util.FederatedIdentity;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
 import org.jboss.logging.Logger;
 import org.keycloak.broker.oidc.OAuth2IdentityProviderConfig;
+import org.keycloak.models.ClientModel;
 import org.keycloak.models.FederatedIdentityModel;
 import org.keycloak.models.IdentityProviderModel;
 import org.keycloak.models.KeycloakSession;
@@ -73,7 +75,16 @@ public final class EdcChannelDetector {
    * @return channel flags keyed by the note names the template and endpoint exchange
    */
   public static Map<String, String> detect(KeycloakSession session, PrivacyIdeaService privacyIdea,
-    UserModel user) {
+      UserModel user) {
+    return detect(session, privacyIdea, user, null);
+  }
+
+  /**
+   * Client-aware overload: the channel policy is resolved from the client's own attributes where
+   * present, falling back to the realm's.
+   */
+  public static Map<String, String> detect(KeycloakSession session, PrivacyIdeaService privacyIdea,
+      UserModel user, ClientModel client) {
     Map<String, String> channels = new LinkedHashMap<>();
     channels.put(EdcMfaChannelsAuthenticator.NOTE_EMAIL, "0");
     channels.put(EdcMfaChannelsAuthenticator.NOTE_TOTP, "0");
@@ -88,9 +99,192 @@ public final class EdcChannelDetector {
     detectTelegram(session, user, channels);
     detectPrivacyIdeaTokens(privacyIdea, user, channels);
     suppressUndeliverableTelegram(user, channels);
+    applyChannelPolicy(session, channels, client);
     channels.put(EdcMfaChannelsAuthenticator.NOTE_ENROLMENT_REQUIRED,
-      hasNoUsableChannel(channels) ? "1" : "0");
+        enrolmentRequired(session, user, channels, client) ? "1" : "0");
     return channels;
+  }
+
+/**
+   * Whether this person still owes an enrolment.
+   *
+   * <p>Two reasons, and only two: they have no working channel at all, which is the question
+   * {@link #hasNoUsableChannel} answers, or ICT has marked one or more channels as required and they
+   * do not have <em>all</em> of them.
+   *
+   * <p>Every required channel has to be present, not one of them. A user who has Telegram while this
+   * realm also requires the authenticator app is still owed an enrolment - that is what "required"
+   * means, and reading it as "any one of them" would let a requirement be satisfied by a channel
+   * somebody set up for an unrelated reason. Email is the documented exception: a user with no
+   * address on file is not held to it, because the option is not on their screen either.
+   *
+   * <p>{@code required} is read from the realm rather than passed in, so there is one answer to this
+   * question in the codebase and no caller can compute a looser version of it.
+   */
+  public static boolean enrolmentRequired(KeycloakSession session, UserModel user,
+      Map<String, String> channels) {
+    return enrolmentRequired(session, user, channels, null);
+  }
+
+  /**
+   * Client-aware overload: required channels come from the client's policy (or the realm default).
+   */
+  public static boolean enrolmentRequired(KeycloakSession session, UserModel user,
+      Map<String, String> channels, ClientModel client) {
+    if (hasNoUsableChannel(channels)) {
+      return true;
+    }
+    RealmModel realm = session == null || session.getContext() == null ? null
+        : session.getContext().getRealm();
+    return requiredPending(session, user, channels, EdcChannelPolicy.requiredFor(client, realm));
+  }
+
+  /**
+   * Whether a channel this person can use is required and not set up.
+   *
+   * <p>The exemption is the whole point of this method. A required channel the user has no way to
+   * reach - Email when they have no address on file, Telegram when the bot is not configured on this
+   * deployment - is not held against them: they cannot see the option either, and demanding a second
+   * step behind a row that is not on their screen would put a few thousand people into a wizard they
+   * cannot leave. Demanding enrolment for something unreachable is the one outcome this must never
+   * produce, so the unreachable case always resolves to "not pending".
+   *
+   * <p>Note the deliberate asymmetry with Telegram being <em>undeliverable</em>: a user with a
+   * Telegram link but no SPASS token reads as Telegram inactive, and that still counts as pending -
+   * that is the state they are meant to fix by linking one, not a reason to let them off.
+   */
+  static boolean requiredPending(KeycloakSession session, UserModel user, Map<String, String> channels,
+      java.util.Set<String> required) {
+    return !pendingRequiredChannels(session, user, channels, required).isEmpty();
+  }
+
+  /**
+   * The required channels this person still owes, in display order.
+   *
+   * <p>The same rule as {@link #requiredPending}, returning the set rather than a boolean, because
+   * two callers need more than the answer: the sign-in path wants the yes/no, and the enrolment
+   * chooser has to put a "Required" badge on exactly these rows. A badge on a row the person cannot
+   * act on - email with no address on file - contradicts the exemption this method exists to apply,
+   * and the contradiction is on the screen they are being asked to act on.
+   *
+   * @return the outstanding required channels, empty when nothing is owed
+   */
+  public static java.util.Set<String> pendingRequiredChannels(KeycloakSession session, UserModel user,
+      Map<String, String> channels, java.util.Set<String> required) {
+    java.util.Set<String> pending = new java.util.LinkedHashSet<>();
+    if (required == null || required.isEmpty()) {
+      return pending;
+    }
+    for (String channel : required) {
+      if (!usableBy(session, user, channel)) {
+        continue;
+      }
+      if (!isOn(channels, noteForChannel(channel))) {
+        pending.add(channel);
+      }
+    }
+    return pending;
+  }
+
+  /**
+   * Whether this person could set this channel up at all, regardless of whether they have.
+   *
+   * <p>Only Email and Telegram can be unreachable. TOTP needs nothing arranged in advance: no
+   * address, no bot, no phone to receive anything on, which is also why it is the one channel that is
+   * safe to require of everybody.
+   *
+   * <p>Backup codes are never "usable" in this sense, and that is deliberate rather than an
+   * oversight. The wizard issues them itself, as its last step, and only once the person has
+   * satisfied everything else - so treating them as outstanding would make the wizard wait on a
+   * channel it will not produce until it stops waiting, and no one would ever finish enrolling. A
+   * policy that names {@code backupCode} as required therefore has no effect on anyone, which is why
+   * {@link EdcChannelPolicy#isSatisfiable} refuses to let one be stored.
+   */
+  private static boolean usableBy(KeycloakSession session, UserModel user, String channel) {
+    if (EdcChannelPolicy.EMAIL.equals(channel)) {
+      return hasEmailAddress(user);
+    }
+    if (EdcChannelPolicy.TELEGRAM.equals(channel)) {
+      return session != null && isTelegramConfigured(session);
+    }
+    return !EdcChannelPolicy.BACKUP_CODE.equals(channel);
+  }
+
+  /** The detection note a channel's state is carried in. */
+  static String noteForChannel(String channel) {
+    return switch (channel) {
+      case EdcChannelPolicy.EMAIL -> EdcMfaChannelsAuthenticator.NOTE_EMAIL;
+      case EdcChannelPolicy.TELEGRAM -> EdcMfaChannelsAuthenticator.NOTE_TELEGRAM;
+      case EdcChannelPolicy.TOTP -> EdcMfaChannelsAuthenticator.NOTE_TOTP;
+      case EdcChannelPolicy.BACKUP_CODE -> EdcMfaChannelsAuthenticator.NOTE_BACKUP_CODE;
+      default -> channel;
+    };
+  }
+
+  /**
+   * Turns off every channel ICT has switched off for this realm.
+   *
+   * <p>Applied last, inside {@link #detect}, so there is one place where the answer is computed and
+   * every reader agrees. Detection asks "can this user be reached on this channel"; this asks "is
+   * this channel permitted at all", which is a different question with a different owner. Doing it
+   * here rather than in each reader is what stops the login chooser, the OTP page, the enrolment
+   * wizard and the account console from disagreeing - and disagreement in that direction is a
+   * bypass, because a channel that one screen still offers is a channel a user can enrol on.
+   *
+   * <p>After this, {@link #hasNoUsableChannel} reports a user whose only remaining channel is
+   * disabled as owing enrolment, which is the correct answer: there is genuinely no way in.
+   *
+   * <p>Separate from the logging wrapper so the rule can be pinned by a test over a plain map.
+   *
+   * @param policy the channels ICT has left on; all four means no change
+   * @return whether anything was switched off
+   */
+  static boolean applyPolicy(Map<String, String> channels, Set<String> policy) {
+    if (policy == null || policy.containsAll(EdcChannelPolicy.all())) {
+      return false;
+    }
+    boolean changed = false;
+    changed |= withdraw(channels, EdcMfaChannelsAuthenticator.NOTE_EMAIL, policy, EdcChannelPolicy.EMAIL);
+    changed |= withdraw(channels, EdcMfaChannelsAuthenticator.NOTE_TOTP, policy, EdcChannelPolicy.TOTP);
+    changed |=
+        withdraw(channels, EdcMfaChannelsAuthenticator.NOTE_TELEGRAM, policy, EdcChannelPolicy.TELEGRAM);
+    changed |= withdraw(channels, EdcMfaChannelsAuthenticator.NOTE_BACKUP_CODE, policy,
+        EdcChannelPolicy.BACKUP_CODE);
+    return changed;
+  }
+
+  /** Withdraws one channel when its note is on and the policy does not include it. */
+  private static boolean withdraw(Map<String, String> channels, String note, Set<String> policy,
+      String channel) {
+    if (policy.contains(channel) || !"1".equals(channels.get(note))) {
+      return false;
+    }
+    channels.put(note, "0");
+    // The masked address is only meaningful while Email is on. Leaving it would let a reader that
+    // shows the badge rather than the flag advertise an address for a switched-off channel.
+    if (EdcChannelPolicy.EMAIL.equals(channel)) {
+      channels.remove(EdcMfaChannelsAuthenticator.NOTE_EMAIL_MASKED);
+    }
+    return true;
+  }
+
+  /** Reads the realm's policy and applies it. */
+  private static void applyChannelPolicy(KeycloakSession session, Map<String, String> channels) {
+    applyChannelPolicy(session, channels, null);
+  }
+
+  /**
+   * Client-aware overload: applies the client's policy (or realm default) to the detected channels.
+   */
+  private static void applyChannelPolicy(KeycloakSession session, Map<String, String> channels,
+      ClientModel client) {
+    RealmModel realm = session == null || session.getContext() == null ? null
+        : session.getContext().getRealm();
+    Set<String> enabled = EdcChannelPolicy.enabledFor(client, realm);
+    if (applyPolicy(channels, enabled)) {
+      log.infof("method=applyChannelPolicy client=%s enabled=%s message=Channels switched off by policy",
+          client == null ? "default" : client.getClientId(), enabled);
+    }
   }
 
   /**

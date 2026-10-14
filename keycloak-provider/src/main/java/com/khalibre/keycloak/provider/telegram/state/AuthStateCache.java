@@ -69,16 +69,45 @@ public class AuthStateCache {
     return state;
   }
 
+  /**
+   * The live scan belonging to a Telegram chat: the most recently created one.
+   *
+   * <p>Newest, not simply any. A browser that mints a second code re-keys its own session to the new
+   * state but leaves the previous one in the cache, so one chat can own several at once - and this
+   * used to return whichever the map happened to yield, which is an order nobody chose. Measured on
+   * a user who generated three codes in ninety seconds: sharing their phone number wrote to the
+   * first of the three, the bot logged success, and the page polling the code actually on screen
+   * saw no change at all. From the user's side, nothing happened.
+   *
+   * <p>Expired states are skipped rather than merely losing to a newer one. One that has aged out
+   * cannot be completed, so letting it win would make the control that generates a fresh code do
+   * nothing - the exact state a user reaches it in order to escape.
+   */
   public static AuthState findByTelegramUserId(String telegramUserId) {
     if (telegramUserId == null) {
       return null;
     }
-    for (AuthState state : cache.values()) {
-      if (telegramUserId.equals(state.getTelegramUserId())) {
-        return state;
+    AuthState newest = null;
+    for (AuthState candidate : cache.values()) {
+      if (!telegramUserId.equals(candidate.getTelegramUserId())) {
+        continue;
+      }
+      if (newest == null || isNewer(candidate, newest)) {
+        newest = candidate;
       }
     }
-    return null;
+    return newest;
+  }
+
+  /**
+   * Ties on {@code createdAt} are routine - two codes minted in the same second - so the id breaks
+   * them, which keeps the answer the same on every call rather than depending on map order.
+   */
+  private static boolean isNewer(AuthState candidate, AuthState current) {
+    if (candidate.getCreatedAt() != current.getCreatedAt()) {
+      return candidate.getCreatedAt() > current.getCreatedAt();
+    }
+    return candidate.getId().compareTo(current.getId()) > 0;
   }
 
   /**

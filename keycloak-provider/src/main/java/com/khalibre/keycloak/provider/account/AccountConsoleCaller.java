@@ -33,9 +33,6 @@ import jakarta.ws.rs.core.UriInfo;
  */
 public final class AccountConsoleCaller {
 
-  public record CallerContext(UserModel user, String sessionId) {
-  }
-
   private AccountConsoleCaller() {
   }
 
@@ -46,12 +43,16 @@ public final class AccountConsoleCaller {
    *     for the account client, or belongs to a service account
    */
   public static UserModel resolve(KeycloakSession session, UriInfo uriInfo, HttpHeaders headers) {
-    CallerContext context = resolveContext(session, uriInfo, headers);
-    return context == null ? null : context.user();
+    Caller caller = resolveCaller(session, uriInfo, headers);
+    return caller != null ? caller.user() : null;
   }
 
-  public static CallerContext resolveContext(KeycloakSession session, UriInfo uriInfo,
-      HttpHeaders headers) {
+  /**
+   * Verifies the bearer token and resolves the user plus the access token.
+   *
+   * @return a {@link Caller} with the user and token, or {@code null} if the token is invalid
+   */
+  public static Caller resolveCaller(KeycloakSession session, UriInfo uriInfo, HttpHeaders headers) {
     RealmModel realm = session.getContext().getRealm();
     ClientModel accountClient = realm.getClientByClientId(Constants.ACCOUNT_MANAGEMENT_CLIENT_ID);
     if (accountClient == null || !accountClient.isEnabled()) {
@@ -84,6 +85,12 @@ public final class AccountConsoleCaller {
       return null;
     }
 
-    return new CallerContext(authResult.getUser(), accessToken.getSessionState());
+    return new Caller(authResult.getUser(), accessToken);
+  }
+
+  /**
+   * The authenticated caller and their access token.
+   */
+  public record Caller(UserModel user, AccessToken token) {
   }
 }

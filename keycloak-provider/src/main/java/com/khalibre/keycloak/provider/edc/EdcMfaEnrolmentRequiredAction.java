@@ -2,12 +2,15 @@ package com.khalibre.keycloak.provider.edc;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import jakarta.ws.rs.core.MultivaluedMap;
 
 import org.jboss.logging.Logger;
 import org.keycloak.authentication.RequiredActionContext;
 import org.keycloak.forms.login.LoginFormsProvider;
+import org.keycloak.models.ClientModel;
+import org.keycloak.models.RealmModel;
 import org.keycloak.models.UserModel;
 import org.keycloak.sessions.AuthenticationSessionModel;
 
@@ -96,11 +99,12 @@ public class EdcMfaEnrolmentRequiredAction
       // The authoritative check, run once per login and only before the wizard has started.
       // Requiring a live channel as well as the marker is what makes clearing a user's channels send
       // them round again, instead of the stale marker waving them through.
-      if (!EdcEnrolmentState.requiresEnrolment(context.getSession(), privacyIdea(context), user)) {
+      if (!EdcEnrolmentState.requiresEnrolment(context.getSession(), privacyIdea(context), user,
+          authSession == null ? null : authSession.getClient())) {
         context.success();
         return;
       }
-      step = startingStep(authSession);
+      step = startingStep(authSession, user, context);
       authSession.setAuthNote(NOTE_STEP, step);
     }
 
@@ -196,27 +200,58 @@ public class EdcMfaEnrolmentRequiredAction
    * execution ran, the answer is already here, and if it did not, "offer the chooser" is always a
    * safe place to start.
    */
-  private String startingStep(AuthenticationSessionModel authSession) {
-    boolean hasChannel = authSession != null
-        && (isOn(authSession, EdcMfaChannelsAuthenticator.NOTE_TELEGRAM)
-            || isOn(authSession, EdcMfaChannelsAuthenticator.NOTE_EMAIL)
-            || isOn(authSession, EdcMfaChannelsAuthenticator.NOTE_TOTP)
-            || isOn(authSession, EdcMfaChannelsAuthenticator.NOTE_BACKUP_CODE));
-    return hasChannel ? STEP_BACKUP : STEP_CHOOSE;
+  private String startingStep(AuthenticationSessionModel authSession, UserModel user,
+      RequiredActionContext context) {
+    ClientModel client = authSession == null ? null : authSession.getClient();
+    Map<String, String> current =
+        EdcChannelDetector.detect(context.getSession(), privacyIdea(context), user, client);
+    if (EdcChannelDetector.enrolmentRequired(context.getSession(), user, current, client)) {
+      return STEP_CHOOSE;
+    }
+    boolean hasBackupCodes = "1".equals(current.get(EdcMfaChannelsAuthenticator.NOTE_BACKUP_CODE));
+    return hasBackupCodes ? STEP_CHOOSE : STEP_BACKUP;
   }
 
   private void renderChoose(RequiredActionContext context, UserModel user, String errorKey) {
-    boolean telegram = EdcChannelDetector.isTelegramConfigured(context.getSession());
-    boolean email = EdcChannelDetector.hasEmailAddress(user);
+    AuthenticationSessionModel authSession = context.getAuthenticationSession();
+    ClientModel client = authSession == null ? null : authSession.getClient();
+    RealmModel realm = context.getRealm();
+
+    boolean telegramPermitted = EdcChannelPolicy.isEnabled(client, realm, EdcChannelPolicy.TELEGRAM)
+        && EdcChannelDetector.isTelegramConfigured(context.getSession());
+    boolean emailPermitted = EdcChannelPolicy.isEnabled(client, realm, EdcChannelPolicy.EMAIL);
+    boolean totpPermitted = EdcChannelPolicy.isEnabled(client, realm, EdcChannelPolicy.TOTP);
+
+    Map<String, String> current =
+        EdcChannelDetector.detect(context.getSession(), privacyIdea(context), user, client);
+    boolean telegramConfigured = "1".equals(current.get(EdcMfaChannelsAuthenticator.NOTE_TELEGRAM));
+    boolean emailConfigured = "1".equals(current.get(EdcMfaChannelsAuthenticator.NOTE_EMAIL));
+    boolean totpConfigured = "1".equals(current.get(EdcMfaChannelsAuthenticator.NOTE_TOTP));
+
+    // The outstanding requirement, not the stored one. Every required channel has to be set up, but a
+    // channel this person cannot reach is not held against them - and a "Required" badge beside a
+    // row that is greyed out as Unavailable tells them to do something the server will then not
+    // accept, so the two states have to come from the same rule the wizard itself obeys.
+    Set<String> outstanding = EdcChannelDetector.pendingRequiredChannels(context.getSession(), user,
+        current, EdcChannelPolicy.requiredFor(client, realm));
+
     LoginFormsProvider form = context.form();
-    form.setAttribute("telegramAvailable", telegram);
-    form.setAttribute("emailAvailable", email);
-    // Telegram is the default whenever the bot is configured, and carries the "Recommended" tag. It
-    // is the only channel that needs nothing arranged in advance: no email address on file, which
-    // most staff here do not have, and no second app to install. TOTP stays checked when Telegram is
-    // not configured, which the template handles from telegramAvailable.
-    form.setAttribute("telegramRecommended", telegram);
+    form.setAttribute("telegramAvailable", telegramPermitted);
+    form.setAttribute("emailAvailable", emailPermitted);
+    form.setAttribute("totpAvailable", totpPermitted);
+    form.setAttribute("telegramConfigured", telegramConfigured);
+    form.setAttribute("emailConfigured", emailConfigured);
+    form.setAttribute("totpConfigured", totpConfigured);
+    form.setAttribute("hasEmailAddress", EdcChannelDetector.hasEmailAddress(user));
+    form.setAttribute("telegramRecommended", telegramPermitted && !telegramConfigured);
     form.setAttribute("error", errorKey);
+    form.setAttribute("anyChannelAvailable", (telegramPermitted && !telegramConfigured)
+        || (emailPermitted && !emailConfigured)
+        || (totpPermitted && !totpConfigured));
+    form.setAttribute("requiredChannels", outstanding.stream()
+        .filter(java.util.List.of(EdcChannelPolicy.EMAIL, EdcChannelPolicy.TELEGRAM,
+            EdcChannelPolicy.TOTP)::contains)
+        .toList());
     context.challenge(form.createForm("edc-mfa-enrol-choose.ftl"));
   }
 
@@ -224,6 +259,26 @@ public class EdcMfaEnrolmentRequiredAction
       AuthenticationSessionModel authSession, String channel) throws Exception {
     if (channel == null) {
       render(context, authSession, STEP_CHOOSE, "edc.enrol.chooseError");
+      return;
+    }
+    ClientModel client = authSession.getClient();
+    if (!EdcChannelPolicy.isEnabled(client, context.getRealm(), channel)) {
+      log.warnf("method=choose user=%s channel=%s status=REJECTED "
+          + "message=Channel is switched off", user.getUsername(), channel);
+      render(context, authSession, STEP_CHOOSE, "edc.enrol.chooseError");
+      return;
+    }
+    Map<String, String> current =
+        EdcChannelDetector.detect(context.getSession(), privacyIdea(context), user, client);
+    boolean alreadyConfigured = switch (channel) {
+      case EdcEnrolmentState.CHANNEL_TELEGRAM -> "1".equals(current.get(EdcMfaChannelsAuthenticator.NOTE_TELEGRAM));
+      case EdcEnrolmentState.CHANNEL_EMAIL -> "1".equals(current.get(EdcMfaChannelsAuthenticator.NOTE_EMAIL));
+      case EdcEnrolmentState.CHANNEL_TOTP -> "1".equals(current.get(EdcMfaChannelsAuthenticator.NOTE_TOTP));
+      default -> false;
+    };
+    if (alreadyConfigured) {
+      log.warnf("method=choose user=%s channel=%s status=ALREADY_CONFIGURED", user.getUsername(), channel);
+      render(context, authSession, STEP_CHOOSE, "edc.enrol.alreadyConfigured");
       return;
     }
     switch (channel) {
@@ -306,16 +361,42 @@ public class EdcMfaEnrolmentRequiredAction
     AuthenticationSessionModel authSession = context.getAuthenticationSession();
     String stored = authSession.getAuthNote(NOTE_BACKUP_CODES);
     if (stored == null) {
-      // privacyIDEA keeps only hashes, so there is nothing to fall back on and no way to show them
-      // again. Send the user through the wizard rather than pretend they were saved.
-      log.warnf("method=renderBackupCodes user=%s message=CodesNotInSession", user.getUsername());
-      EdcEnrolmentState.clear(context.getSession(), user);
-      backToChooser(context, authSession, "edc.enrol.failed");
+      // Issue a fresh set rather than show a step with nothing on it. privacyIDEA keeps only hashes,
+      // so there is no earlier set to recover - but issuing is exactly what the user needs anyway.
+      //
+      // This is every entry to the backup step that did not come from channelEnrolled, and the one
+      // that matters is the wizard restarting: a user who has satisfied every required channel but
+      // never finished comes back in with no session notes, startingStep sees the requirement met
+      // and no backup codes, and lands here. It used to clear their enrolment and bounce them to
+      // the chooser - where the only channel on offer was the one they had already set up, so
+      // choosing it led straight back here. Marking the authenticator app required turns that into
+      // a dead end for exactly the users it was meant to catch.
+      log.infof("method=renderBackupCodes user=%s message=NoCodesInSession, issuing a new set",
+          user.getUsername());
+      try {
+        issueBackupCodes(context, user, authSession, enrolledChannel(user));
+      } catch (Exception e) {
+        log.errorf(e, "method=renderBackupCodes user=%s message=Could not issue backup codes",
+            user.getUsername());
+        EdcEnrolmentState.clear(context.getSession(), user);
+        backToChooser(context, authSession, "edc.enrol.failed");
+      }
       return;
     }
     LoginFormsProvider form = context.form();
     form.setAttribute("backupCodes", List.of(stored.split(CODE_SEPARATOR)));
     context.challenge(form.createForm("edc-mfa-enrol-backup.ftl"));
+  }
+
+  /**
+   * The channel to record against a backup-code issue that did not follow a channel step.
+   *
+   * <p>The record is only what a support call reads, so the marker from an earlier enrolment is the
+   * honest answer, and "the backup codes" is the truth when there was never one.
+   */
+  private String enrolledChannel(UserModel user) {
+    String recorded = user.getFirstAttribute(EdcEnrolmentState.ATTR_ENROLLED_CHANNEL);
+    return recorded == null || recorded.isBlank() ? EdcEnrolmentState.CHANNEL_BACKUP_CODE : recorded;
   }
 
   // ------------------------------------------------------------------ work
@@ -335,8 +416,8 @@ public class EdcMfaEnrolmentRequiredAction
     } else {
       // The same delivery sign-in uses: write the PIN, then let the mail and the bot carry it.
       // Checking that code is what proves the address on file is one the user can actually read.
-      EdcOtpDelivery.issue(context.getSession(), context.getRealm(), user, settings(context), pi,
-          adminToken, token.serial(), context.getConnection().getRemoteAddr());
+      EdcOtpDelivery.issue(context.getSession(), context.getRealm(), authSession.getClient(), user,
+          settings(context), pi, adminToken, token.serial(), context.getConnection().getRemoteAddr());
     }
     authSession.setAuthNote(NOTE_STEP, TYPE_TOTP.equals(type) ? STEP_TOTP : STEP_EMAIL);
     log.infof("method=enrolToken user=%s type=%s serial=%s", user.getUsername(), type,
@@ -352,11 +433,11 @@ public class EdcMfaEnrolmentRequiredAction
       render(context, authSession, STEP_TELEGRAM, "edc.enrol.telegramNotLinked");
       return;
     }
-    issueBackupCodes(context, user, authSession, EdcEnrolmentState.CHANNEL_TELEGRAM);
+    channelEnrolled(context, user, authSession, EdcEnrolmentState.CHANNEL_TELEGRAM);
   }
 
   /**
-   * Checks the code the user typed, then issues the backup codes.
+   * Checks the code the user typed, then completes the channel enrolment.
    *
    * <p>privacyIDEA is asked to check it against the user rather than against the serial enrolled a
    * moment ago: that is the same call the sign-in page makes, so the channel behaves identically
@@ -372,6 +453,33 @@ public class EdcMfaEnrolmentRequiredAction
       return;
     }
     discardStepToken(authSession);
+    channelEnrolled(context, user, authSession, channel);
+  }
+
+  /**
+   * Called when one channel has been successfully verified during enrolment.
+   *
+   * <p>If more channels are required by policy (and the user is capable of configuring them),
+   * returns the user to the chooser with a prompt to configure the next required channel.
+   * Once all required channels are satisfied, issues backup codes as the final wizard step.
+   */
+  private void channelEnrolled(RequiredActionContext context, UserModel user,
+      AuthenticationSessionModel authSession, String channel) throws Exception {
+    ClientModel client = authSession.getClient();
+    Map<String, String> current =
+        EdcChannelDetector.detect(context.getSession(), privacyIdea(context), user, client);
+    current.forEach(authSession::setAuthNote);
+
+    boolean stillRequires =
+        EdcChannelDetector.enrolmentRequired(context.getSession(), user, current, client);
+    if (stillRequires) {
+      log.infof("method=channelEnrolled user=%s channel=%s status=CHANNEL_COMPLETE_MORE_REQUIRED",
+          user.getUsername(), channel);
+      clearWizard(authSession);
+      render(context, authSession, STEP_CHOOSE, "edc.enrol.channelSetupNextRequired");
+      return;
+    }
+
     issueBackupCodes(context, user, authSession, channel);
   }
 

@@ -15,6 +15,11 @@ import javax.crypto.spec.SecretKeySpec;
  * both FreeMarker and a plain REST endpoint: Keycloak only resolves the authentication session for
  * login-action requests, and its cookie value is signed in a way that cannot be decoded from a
  * provider. A self-contained token avoids depending on those internals.
+ *
+ * <p>It also carries the client the user is signing in to. The OTP page's endpoints are plain REST
+ * calls with no authentication session and no token of their own, so without this they cannot tell
+ * which application's channel policy applies - and a per-application switch that both the delivery
+ * path and the page ignore is not a switch.
  */
 public final class EdcChallengeToken {
 
@@ -22,18 +27,34 @@ public final class EdcChallengeToken {
   private static final Base64.Encoder ENCODER = Base64.getUrlEncoder().withoutPadding();
   private static final Base64.Decoder DECODER = Base64.getUrlDecoder();
 
+  /** Separator between payload fields. Neither a username nor a client id may contain one. */
+  private static final String SEPARATOR = "\\|";
+
   private EdcChallengeToken() {
   }
 
   /**
-   * @param ttlSeconds how long the token stays valid; keep it near the OTP validity
-   * @return {@code base64url(user|issuedAtMs).base64url(hmac)}, or {@code null} if not signable
+   * What a valid challenge token proves.
+   *
+   * @param username who passed the first factor
+   * @param clientId the client they are signing in to, or {@code null} where the token was issued
+   *     with no client
    */
-  public static String issue(String username, String secret, long ttlSeconds) {
+  public record Challenge(String username, String clientId) {
+  }
+
+  /**
+   * @param ttlSeconds how long the token stays valid; keep it near the OTP validity
+   * @param clientId the client being signed in to; null or blank is stored as absent
+   * @return {@code base64url(user|issuedAtMs[|clientId]).base64url(hmac)}, or {@code null} if not
+   *     signable
+   */
+  public static String issue(String username, String clientId, String secret, long ttlSeconds) {
     if (username == null || username.isBlank() || secret == null || secret.isBlank()) {
       return null;
     }
-    String payload = username + "|" + System.currentTimeMillis();
+    String payload = username + "|" + System.currentTimeMillis()
+        + (clientId == null || clientId.isBlank() ? "" : "|" + clientId);
     return ENCODER.encodeToString(payload.getBytes(StandardCharsets.UTF_8))
         + "." + ENCODER.encodeToString(hmac(secret, payload));
   }
@@ -43,6 +64,20 @@ public final class EdcChallengeToken {
    *         tampered with, or older than {@code ttlSeconds}
    */
   public static String verify(String token, String secret, long ttlSeconds) {
+    Challenge challenge = verifyChallenge(token, secret, ttlSeconds);
+    return challenge == null ? null : challenge.username();
+  }
+
+  /**
+   * Everything a valid token says.
+   *
+   * <p>Every check {@link #verify} did still runs first: nothing here trusts a field it has not
+   * authenticated.
+   *
+   * @return the challenge, or {@code null} if the token is missing, forged, tampered with, or older
+   *     than {@code ttlSeconds}
+   */
+  public static Challenge verifyChallenge(String token, String secret, long ttlSeconds) {
     if (token == null || token.isBlank() || secret == null || secret.isBlank()) {
       return null;
     }
@@ -65,14 +100,17 @@ public final class EdcChallengeToken {
       return null;
     }
 
-    int sep = payload.lastIndexOf('|');
-    if (sep <= 0) {
+    // Three fields, the third optional: a cookie issued before this field existed still proves a
+    // first factor, it simply cannot name a client and so reads as the realm default. The split
+    // limit matters - an unbounded one would let a client id containing a separator shift the
+    // timestamp and be read as the issued-at instead.
+    String[] parts = payload.split(SEPARATOR, 3);
+    if (parts.length < 2 || parts[0].isBlank()) {
       return null;
     }
-    String username = payload.substring(0, sep);
     long issuedAt;
     try {
-      issuedAt = Long.parseLong(payload.substring(sep + 1));
+      issuedAt = Long.parseLong(parts[1]);
     } catch (NumberFormatException e) {
       return null;
     }
@@ -82,7 +120,7 @@ public final class EdcChallengeToken {
     if (ageMillis < 0 || ageMillis > ttlSeconds * 1000L) {
       return null;
     }
-    return username;
+    return new Challenge(parts[0], parts.length > 2 && !parts[2].isBlank() ? parts[2] : null);
   }
 
   /**
@@ -96,7 +134,14 @@ public final class EdcChallengeToken {
         + "; HttpOnly; SameSite=Lax";
   }
 
-  /** Milliseconds since the epoch when {@code token} was issued, or -1 if it is not valid. */
+  /**
+   * Milliseconds since the epoch when {@code token} was issued, or -1 if it is not valid.
+   *
+   * <p>Signed but deliberately not age-checked: the caller uses this for the OTP page's countdown,
+   * which describes the <em>code</em> rather than the challenge, and the two have different
+   * lifetimes - the challenge cookie deliberately outlives the code so that "Send a new code" still
+   * works once the old one lapses. Expiring this would take the countdown away at exactly that point.
+   */
   public static long issuedAtMillis(String token, String secret) {
     if (token == null || secret == null) {
       return -1;
@@ -110,8 +155,9 @@ public final class EdcChallengeToken {
       if (!MessageDigest.isEqual(hmac(secret, payload), DECODER.decode(token.substring(dot + 1)))) {
         return -1;
       }
-      int sep = payload.lastIndexOf('|');
-      return sep <= 0 ? -1 : Long.parseLong(payload.substring(sep + 1));
+      // Field 2, not the last field: the payload carries the client id after it.
+      String[] parts = payload.split(SEPARATOR, 3);
+      return parts.length < 2 ? -1 : Long.parseLong(parts[1]);
     } catch (IllegalArgumentException e) {
       return -1;
     }
