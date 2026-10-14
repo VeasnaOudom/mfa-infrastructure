@@ -67,6 +67,8 @@ Run tasks with `mise run <task>`.
 | `build:keycloak-provider` | Build the Keycloak provider JAR (runs tests) |
 | `build:khalibre-account-ui` | Build the khalibre-account-ui theme JAR and copy it to `keycloak-providers/` |
 | `deploy:khalibre-account-ui` | Build the khalibre-account-ui theme JAR and restart Keycloak to load it |
+| `build:khalibre-admin-ui` | Build the khalibre-admin-ui theme JAR (downloads the pinned Keycloak console source on first run) and copy it to `keycloak-providers/` |
+| `deploy:admin-ui` | Build the khalibre-admin-ui theme and restart Keycloak to load it |
 | `deploy:keycloak-provider` | Build and deploy the provider JAR into the running Keycloak container |
 | `ps` / `pull` | Show containers or pull images |
 | `db:export` | Create a full MariaDB physical backup in `databases/export/` |
@@ -104,6 +106,60 @@ This runs on every `mise run start` and `mise run start:keycloak`, and produces:
 |---|---|
 | `keycloak-provider-1.0.0.jar` | `keycloak-provider/` (Gradle `assemble`, tests skipped) |
 | `khalibre-account-ui-26.1.3.jar` | `khalibre-account-ui/` (npm + Maven) |
+| `khalibre-admin-ui-26.1.3.jar` | `khalibre-admin-ui/` (built on demand, see below) |
+
+The admin console theme is **not** part of `build:keycloak-providers`: it needs a checkout of Keycloak's
+own JS sources the first time it runs, which takes several minutes. Build it when you want the EDC MFA
+page in the console.
+
+## Khalibre Admin UI
+
+`khalibre-admin-ui/` is the administration console plus one page: **EDC MFA** under Configure, where
+ICT switches the four channels (Email, Telegram, Authenticator app, Backup codes) on and off for the
+realm. The page talks to `GET/POST /realms/EDC/edc-mfa-admin/channels` in `keycloak-provider/`.
+`POST /realms/EDC/edc-mfa-admin/reset` — resetting one user's MFA — stays curl-only for now; it is
+moving to a per-user screen under Users.
+
+```bash
+# Build the theme JAR and copy it to keycloak-providers/
+mise run build:khalibre-admin-ui
+
+# Build and restart Keycloak so it serves the new console
+mise run deploy:admin-ui
+```
+
+The admin console is a React app with no plugin hook, so this is a **scripted patch of a pinned
+checkout** rather than a fork. On first use the task downloads `keycloak-26.1.3` into `build/`
+(gitignored), installs its dependencies with the pnpm version it pins, copies `khalibre-admin-ui/src/mfa/`
+into the checkout, and patches three files: `src/routes.tsx`, `src/PageNav.tsx` and `vite.config.ts`.
+Each edit replaces an exact anchor and fails loudly if the anchor has moved, so an upstream upgrade that
+moved something stops the build instead of producing a console with no EDC page in it. The Vite build
+that follows also type-checks the page, under `strict: true`.
+
+| Path | What it is |
+|---|---|
+| `src/mfa/` | The page: `MfaChannels.tsx`, its route object, and the API calls |
+| `scripts/patch-admin-ui.mjs` | Copies the page into the checkout and applies the three edits (idempotent) |
+| `maven-resources/` | `keycloak-themes.json`, the theme's `theme.properties`, and its messages |
+| `pom.xml` | Packages the built console into `khalibre-admin-ui-26.1.3.jar` |
+
+Set `KEYCLOAK_JS_DIR` to point at a checkout you already have; otherwise the task fetches it.
+
+**Activating it.** A realm's console runs the theme named in that realm's `adminTheme` setting - there
+is no `--spi-theme-default-admin` in KC 26. `EDC` is set to `khalibre-admin`, so its console serves the
+page; `master` is left on the stock console. It lives in the database (`REALM.ADMIN_THEME`), so a
+restored backup carries it and an older backup does not:
+
+```bash
+# what the realm is set to
+docker exec mfa-mariadb mariadb -uroot -p"$MYSQL_ROOT_PASSWORD" -N -B \
+  -e "SELECT name, ADMIN_THEME FROM keycloak.REALM;"
+
+# back to the stock console
+docker exec mfa-mariadb mariadb -uroot -p"$MYSQL_ROOT_PASSWORD" -e \
+  "UPDATE keycloak.REALM SET ADMIN_THEME=NULL WHERE NAME='EDC';"
+docker restart mfa-keycloak
+```
 
 ## Khalibre Account UI
 

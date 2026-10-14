@@ -5,6 +5,9 @@ certs/*/*
 certs/truststore/
 !certs/truststore/.gitkeep
 .ansible
+# Scratch build inputs fetched by the mise tasks - the pinned Keycloak console checkout and its
+# node_modules. Root-anchored, so keycloak-provider/build/ is unaffected.
+/build
 !databases/export/.gitkeep
 databases/export/*tar.gz
 databases/*tar.gz
