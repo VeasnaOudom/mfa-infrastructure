@@ -1,9 +1,12 @@
 package com.khalibre.keycloak.provider.edc;
 
+import java.time.Instant;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import jakarta.ws.rs.GET;
 import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.Produces;
@@ -15,8 +18,10 @@ import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.core.UriInfo;
 
 import org.jboss.logging.Logger;
+import org.keycloak.models.ClientModel;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.RealmModel;
+import org.keycloak.models.RoleModel;
 import org.keycloak.models.UserModel;
 import org.keycloak.representations.AccessToken;
 import org.keycloak.services.managers.AppAuthManager;
@@ -56,6 +61,9 @@ public class EdcMfaAdminResource implements RealmResourceProvider {
    *  not on this module's compile classpath, and a wrong id here fails closed anyway. */
   private static final String REALM_MANAGEMENT_CLIENT_ID = "realm-management";
 
+  /** Roles that make an account an ICT one: the composite, or the single role it contains. */
+  private static final String[] REALM_ADMIN_ROLES = { "manage-realm", "admin" };
+
   /** Token types a user can hold, so {@code deleteTokens=true} leaves them with no channel at all. */
   private static final String[] TOKEN_TYPES = { "spass", "hotp", "totp", "tan" };
 
@@ -63,6 +71,283 @@ public class EdcMfaAdminResource implements RealmResourceProvider {
 
   public EdcMfaAdminResource(KeycloakSession session) {
     this.session = session;
+  }
+
+  /**
+   * Reports which channels ICT has switched on, which of them are required, and why a request was
+   * refused if one was.
+   *
+   * <p>Returns the realm default plus all configurable applications (enabled non-built-in clients)
+   * with their own policies or inherited state.
+   */
+  @GET
+  @Path("channels")
+  @Produces(MediaType.APPLICATION_JSON)
+  public Response channels(@Context HttpHeaders headers, @Context UriInfo uriInfo) {
+    if (!isIct(headers, uriInfo)) {
+      return unauthorized();
+    }
+    RealmModel realm = session.getContext().getRealm();
+    Set<String> defaultEnabled = EdcChannelPolicy.enabled(realm);
+    Set<String> defaultRequired = EdcChannelPolicy.required(realm);
+
+    Map<String, Object> result = new LinkedHashMap<>();
+    result.put("attribute", EdcChannelPolicy.ATTRIBUTE);
+    result.put("attributeRequired", EdcChannelPolicy.ATTRIBUTE_REQUIRED);
+    result.put("telegramConfigured", EdcChannelDetector.isTelegramConfigured(session));
+
+    // Realm-wide default
+    Map<String, Object> defaultPolicy = new LinkedHashMap<>();
+    List<Map<String, Object>> defaultRows = new java.util.ArrayList<>();
+    for (String channel : EdcChannelPolicy.all()) {
+      Map<String, Object> row = new LinkedHashMap<>();
+      row.put("channel", channel);
+      row.put("enabled", defaultEnabled.contains(channel));
+      row.put("required", defaultRequired.contains(channel));
+      defaultRows.add(row);
+    }
+    defaultPolicy.put("channels", defaultRows);
+    result.put("default", defaultPolicy);
+
+    // Per-application policies
+    List<Map<String, Object>> applications = new java.util.ArrayList<>();
+    for (ClientModel client : EdcChannelPolicy.configurableClients(realm)) {
+      Set<String> clientEnabled = EdcChannelPolicy.enabledFor(client, realm);
+      Set<String> clientRequired = EdcChannelPolicy.requiredFor(client, realm);
+      boolean inherited = !EdcChannelPolicy.hasOwnPolicy(client);
+
+      Map<String, Object> app = new LinkedHashMap<>();
+      app.put("clientId", client.getClientId());
+      app.put("name", client.getName() != null && !client.getName().isBlank() ? client.getName() : client.getClientId());
+      app.put("inherited", inherited);
+      app.put("enabledAttribute", EdcChannelPolicy.ownEnabledAttribute(client));
+      app.put("requiredAttribute", EdcChannelPolicy.ownRequiredAttribute(client));
+
+      List<Map<String, Object>> appRows = new java.util.ArrayList<>();
+      for (String channel : EdcChannelPolicy.all()) {
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("channel", channel);
+        row.put("enabled", clientEnabled.contains(channel));
+        row.put("required", clientRequired.contains(channel));
+        appRows.add(row);
+      }
+      app.put("channels", appRows);
+
+      // Last changed timestamp if the client has its own policy. The attribute name lives in
+      // EdcChannelPolicy so this read and the write in setChannels() cannot drift onto two
+      // spellings, which is how the column silently goes permanently blank.
+      String updated = client.getAttribute(EdcChannelPolicy.ATTRIBUTE_UPDATED);
+      app.put("lastChanged", updated != null && !updated.isBlank() ? updated : null);
+
+      applications.add(app);
+    }
+    result.put("applications", applications);
+
+    return Response.ok(result, MediaType.APPLICATION_JSON).build();
+  }
+
+  /**
+   * Switches channels on or off, and marks any of them as required.
+   *
+   * <p>With no {@code client} parameter, updates the realm-wide default. With a {@code client}
+   * parameter, updates that client's own policy (or clears it back to inherited when
+   * {@code channels} is empty/absent).
+   *
+   * <p>Non-destructive by design: tokens and Telegram links are left alone, so re-enabling a channel
+   * restores it for everyone instantly. Anything else would make a toggle into a mass delete of
+   * people's second factors, and on this realm those writes are the ones that are hard to undo -
+   * see the class comment.
+   *
+   * <p>The whole set is replaced, so the caller sends the complete list. A partial update would make
+   * "turn Telegram off" mean something different depending on what was there before.
+   *
+   * @param client optional client id; absent means the realm default
+   * @param channels query parameter, comma separated; empty with a client present clears the override
+   * @param required query parameter, comma separated; absent leaves the stored list untouched
+   */
+  @POST
+  @Path("channels")
+  @Produces(MediaType.APPLICATION_JSON)
+  public Response setChannels(@QueryParam("client") String clientId,
+      @QueryParam("channels") String channels,
+      @QueryParam("required") String required,
+      @Context HttpHeaders headers, @Context UriInfo uriInfo) {
+    if (!isIct(headers, uriInfo)) {
+      return unauthorized();
+    }
+    RealmModel realm = session.getContext().getRealm();
+    ClientModel client = null;
+    boolean isDefault = clientId == null || clientId.isBlank();
+
+    if (!isDefault) {
+      client = realm.getClientByClientId(clientId);
+      if (client == null) {
+        return Response.status(Response.Status.NOT_FOUND)
+            .entity(Map.of("error", "No such client", "clientId", clientId)).build();
+      }
+      if (!client.isEnabled()) {
+        return Response.status(Response.Status.CONFLICT)
+            .entity(Map.of("error", "Client is disabled", "clientId", clientId)).build();
+      }
+      if (EdcChannelPolicy.isBuiltInClientId(clientId)) {
+        return Response.status(Response.Status.CONFLICT)
+            .entity(Map.of("error", "That client's channels are never read",
+                "error_description",
+                "It is a Keycloak resource server or a machine-to-machine id, so no sign-in is ever "
+                    + "resolved against it and a policy here would be stored and do nothing. "
+                    + "account-console, by contrast, is configurable and is what governs the "
+                    + "self-service MFA page.")).build();
+      }
+    }
+
+    // For a client, empty channels means "clear the override, inherit from default"
+    if (!isDefault && (channels == null || channels.isBlank())) {
+      client.removeAttribute(EdcChannelPolicy.ATTRIBUTE);
+      client.removeAttribute(EdcChannelPolicy.ATTRIBUTE_REQUIRED);
+      client.removeAttribute(EdcChannelPolicy.ATTRIBUTE_UPDATED);
+      log.infof("method=setChannels client=%s status=CLEARED message=Policy cleared, now inherits default",
+          clientId);
+      return Response.ok(Map.of("status", "cleared", "inherits", true,
+          "required", String.join(",", EdcChannelPolicy.required(realm))), MediaType.APPLICATION_JSON)
+          .build();
+    }
+
+    if (channels == null) {
+      return Response.status(Response.Status.BAD_REQUEST)
+          .entity(Map.of("error", "channels is required",
+              "error_description",
+              "Comma-separated, e.g. " + String.join(",", EdcChannelPolicy.all())))
+          .build();
+    }
+
+    Set<String> requested = EdcChannelPolicy.parse(channels);
+    // parse() deliberately treats an unrecognisable value as "all on", which is right for a stored
+    // attribute and wrong for a request: here it would turn a typo into a silent reset of the realm
+    // to everything on. So the refusal is made here, where the intent is explicit.
+    if (requested.size() == EdcChannelPolicy.all().size() && !namesAllChannels(channels)) {
+      return Response.status(Response.Status.BAD_REQUEST)
+          .entity(Map.of("error", "No recognisable channel", "channels", channels)).build();
+    }
+
+    String value;
+    try {
+      value = EdcChannelPolicy.serialise(requested);
+    } catch (IllegalArgumentException e) {
+      log.warnf("method=setChannels client=%s channels=%s status=REJECTED message=%s",
+          isDefault ? "default" : clientId, channels, e.getMessage());
+      return Response.status(Response.Status.CONFLICT)
+          .entity(Map.of("error", e.getMessage(),
+              "error_description",
+              "Turning off every channel would leave nobody able to obtain a code. Leave one "
+                  + "enabled."))
+          .build();
+    }
+
+    // A policy that is not empty but still satisfiable by nobody. Backup codes are issued by the
+    // wizard itself, so `backupCode` on its own leaves the enrolment chooser with no rows at all -
+    // every user who reached it would sit at a page saying every method has been switched off. The
+    // refusal belongs here rather than at read time because it is a property of what was just
+    // stored, and this is the only place that knows both halves of it.
+    if (!EdcChannelPolicy.isSatisfiable(requested)) {
+      log.warnf("method=setChannels client=%s channels=%s status=REJECTED "
+          + "message=No channel a user could actually set up", isDefault ? "default" : clientId,
+          value);
+      return Response.status(Response.Status.CONFLICT)
+          .entity(Map.of("error", "Nobody could set up a channel under this policy",
+              "error_description",
+              "Backup codes are issued automatically, so they do not count as something a user can "
+                  + "choose. Leave Email, Telegram or the authenticator app switched on."))
+          .build();
+    }
+
+    // A requirement behind a channel that is switched off is a realm whose population is told to
+    // enrol into something they cannot be offered. Refused rather than silently dropped, because
+    // silently dropping is how an admin would believe a requirement is in force when it is not.
+    String requiredValue = null;
+    if (required != null) {
+      Set<String> wanted = namesIn(required);
+      if (!namesIn(channels).containsAll(wanted)) {
+        Set<String> notEnabled = new java.util.LinkedHashSet<>(wanted);
+        notEnabled.removeAll(namesIn(channels));
+        log.warnf("method=setChannels client=%s required=%s status=REJECTED message=required channel switched off",
+            isDefault ? "default" : clientId, wanted);
+        return Response.status(Response.Status.CONFLICT)
+            .entity(Map.of("error", "A required channel cannot be switched off",
+                "error_description", "Switch off the requirement first, or leave the channel on. "
+                    + "Not switched off: " + String.join(",", notEnabled)))
+            .build();
+      }
+      requiredValue = EdcChannelPolicy.serialiseRequired(wanted);
+    }
+
+    if (isDefault) {
+      realm.setAttribute(EdcChannelPolicy.ATTRIBUTE, value);
+      if (requiredValue != null) {
+        realm.setAttribute(EdcChannelPolicy.ATTRIBUTE_REQUIRED, requiredValue);
+      }
+      log.infof("method=setChannels client=default channels=%s required=%s status=SUCCESS", value,
+          requiredValue == null ? "(unchanged)" : requiredValue);
+    } else {
+      client.setAttribute(EdcChannelPolicy.ATTRIBUTE, value);
+      if (requiredValue != null) {
+        client.setAttribute(EdcChannelPolicy.ATTRIBUTE_REQUIRED, requiredValue);
+      }
+      client.setAttribute(EdcChannelPolicy.ATTRIBUTE_UPDATED, Instant.now().toString());
+      log.infof("method=setChannels client=%s channels=%s required=%s status=SUCCESS", clientId, value,
+          requiredValue == null ? "(unchanged)" : requiredValue);
+    }
+
+    Map<String, Object> body = new LinkedHashMap<>();
+    body.put("status", "ok");
+    body.put("channels", value);
+    body.put("required", requiredValue == null
+        ? String.join(",", isDefault ? EdcChannelPolicy.required(realm)
+            : EdcChannelPolicy.requiredFor(client, realm))
+        : requiredValue);
+    return Response.ok(body, MediaType.APPLICATION_JSON).build();
+  }
+
+  /**
+   * The channel names in a request parameter, ignoring anything unrecognisable.
+   *
+   * <p>Unlike {@link EdcChannelPolicy#parse} this does not substitute "everything" for nonsense: it
+   * is used on the required list, where an unrecognisable word must narrow the request rather than
+   * silently widen it.
+   */
+  private Set<String> namesIn(String commaSeparated) {
+    Set<String> names = new java.util.LinkedHashSet<>();
+    for (String part : commaSeparated.split(",")) {
+      String name = part.trim();
+      if (!name.isEmpty()) {
+        String canonical = EdcChannelPolicy.canonical(name);
+        if (canonical != null) {
+          names.add(canonical);
+        }
+      }
+    }
+    return names;
+  }
+
+  /** Whether a request names every channel, as opposed to only unrecognised words. */
+  private boolean namesAllChannels(String channels) {
+    int named = 0;
+    for (String part : channels.split(",")) {
+      String name = part.trim();
+      if (!name.isEmpty() && EdcChannelPolicy.canonical(name) != null) {
+        named++;
+      }
+    }
+    return named >= EdcChannelPolicy.all().size();
+  }
+
+  private Response unauthorized() {
+    return Response.status(Response.Status.UNAUTHORIZED)
+        .entity(Map.of("error", "Realm management credentials are required",
+            "error_description",
+            "The token must be issued by this realm and carry manage-realm. A master-realm "
+                + "token will not do: a provider mounted here validates against this realm's keys, "
+                + "and the master admin has no user record here to look up"))
+        .build();
   }
 
   /**
@@ -85,12 +370,7 @@ public class EdcMfaAdminResource implements RealmResourceProvider {
       @Context HttpHeaders headers, @Context UriInfo uriInfo) {
     if (!isIct(headers, uriInfo)) {
       log.warn("method=reset status=UNAUTHORIZED message=Needs a realm-management token");
-      return Response.status(Response.Status.UNAUTHORIZED)
-          .entity(Map.of("error", "Realm management credentials are required",
-              "hint", "The token must be issued by this realm and carry manage-realm. A master-realm "
-                  + "token will not do: a provider mounted here validates against this realm's keys, "
-                  + "and the master admin has no user record here to look up"))
-          .build();
+      return unauthorized();
     }
     if (username == null || username.isBlank()) {
       return Response.status(Response.Status.BAD_REQUEST)
@@ -186,15 +466,14 @@ public class EdcMfaAdminResource implements RealmResourceProvider {
    /**
    * Whether the caller is ICT rather than an end user.
    *
-   * <p>One rule: realm-management authority in the token, read from both the places it can appear.
-   * That is the whole check.
+   * <p>Two rules, and the second is the one that matters: the token must have been minted by
+   * <em>this</em> realm, and its subject must be a user here holding realm-management authority.
    *
    * <p>An earlier version of this also accepted "the token was issued by a different realm", on the
    * reasoning that the master admin is a legitimate operator here. That branch is gone: a provider
    * mounted on this realm can only validate a token this realm minted, so it could never fire, and
    * code that looks like a privilege check but is not one is worse than no code - it invites a reader
-   * to believe the master admin can reach this endpoint. It cannot. Getting a token that can is the
-   * caller's problem, and {@code docs/otp-flow-setup.md} says how.
+   * to believe the master admin can reach this endpoint. It cannot.
    *
    * <p>An end user satisfies neither: they hold only {@code default-roles-mfa} and no
    * realm-management role.
@@ -212,18 +491,72 @@ public class EdcMfaAdminResource implements RealmResourceProvider {
             .setTokenString(tokenString)
             .authenticate();
     if (authResult == null || authResult.getToken() == null) {
+      log.warn("method=isIct message=The bearer token did not authenticate against this realm");
       return false;
     }
-    return hasManageRealm(authResult.getToken());
+    // The user the authenticator resolved the token to, rather than a second lookup by subject.
+    // This is what AdminConsole.whoAmI does on the same token, so the two agree by construction -
+    // and it is the only thing that works for a federated user, whose local record is what carries
+    // the role mapping while the identity itself comes from LDAP.
+    UserModel user = authResult.getUser();
+    if (user == null) {
+      log.warnf("method=isIct subject=%s message=Token subject has no user record in this realm",
+          authResult.getToken().getSubject());
+      return false;
+    }
+    if (holdsRealmManagement(session.getContext().getRealm(), user)) {
+      return true;
+    }
+    if (hasManageRealm(authResult.getToken())) {
+      log.infof("method=isIct user=%s message=Accepted from the token's role claims", user.getUsername());
+      return true;
+    }
+    log.warnf("method=isIct user=%s message=No realm-management role on the user record",
+        user.getUsername());
+    return false;
   }
 
   /**
-   * Whether the token carries realm-management authority.
+   * Whether the caller holds realm-management authority, read from the user record.
    *
-   * <p>Both places are checked, and both are needed. {@code manage-realm} is a <em>client</em> role
-   * of {@code realm-management}, so on a user token it arrives under {@code resource_access}; a
-   * service-account token carries the same authority in {@code realm_access}. Checking only the
-   * latter rejects ICT; checking only the former rejects automation.
+   * <p>This is the admin API's own rule, and it is the only one that works. A realm-management role
+   * is a <em>client</em> role of the {@code realm-management} client, and a token only ever carries
+   * the roles of the client that asked for it: the stock {@code roles} client scope maps
+   * {@code resource_access.${client_id}.roles}, and {@code ${client_id}} is the requesting client,
+   * never {@code realm-management}. So {@code manage-realm} appears in a token at all only when some
+   * client scope has been given a mapper that says so - and the admin console's does not.
+   *
+   * <p>Which means a gate that reads the token's claims rejects every admin-console session, i.e.
+   * exactly the caller this endpoint exists for, while a gate that does not read them is blind to
+   * composites and group-inherited roles. The user record is the authority in both cases: it is where
+   * the roles were granted, and {@code hasRole} expands the composites and the group memberships the
+   * way Keycloak's own admin permission checks do.
+   *
+   * <p>Both {@code admin} and {@code manage-realm} are accepted, since a realm admin is normally
+   * granted the first, which is a composite holding the second.
+   */
+  private boolean holdsRealmManagement(RealmModel realm, UserModel user) {
+    ClientModel realmManagement = realm.getClientByClientId(REALM_MANAGEMENT_CLIENT_ID);
+    if (realmManagement == null) {
+      log.warnf("method=holdsRealmManagement realm=%s message=No realm-management client", realm.getName());
+      return false;
+    }
+    for (String roleName : REALM_ADMIN_ROLES) {
+      RoleModel role = realmManagement.getRole(roleName);
+      if (role != null && user.hasRole(role)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Whether the token carries realm-management authority in its claims.
+   *
+   * <p>A second opinion, not the rule: a deployment that has added a client scope mapping
+   * realm-management roles into its tokens gets accepted here without any user lookup. Kept because
+   * it is cheap and can only widen access for a token that this realm already vouches for - the
+   * {@link #isIct} signature check has already run, so it cannot be what admits a master token.
    */
   private boolean hasManageRealm(AccessToken token) {
     return holdsAuthority(token.getRealmAccess())

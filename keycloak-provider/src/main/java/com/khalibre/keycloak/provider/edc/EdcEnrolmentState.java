@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.time.format.DateTimeParseException;
 
 import org.jboss.logging.Logger;
+import org.keycloak.models.ClientModel;
 import org.keycloak.models.GroupModel;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.RealmModel;
@@ -52,6 +53,15 @@ public final class EdcEnrolmentState {
   public static final String CHANNEL_TOTP = "totp";
   public static final String CHANNEL_EMAIL = "email";
 
+  /**
+   * Recorded when enrolment finished on backup codes rather than on a channel step.
+   *
+   * <p>Reachable whenever the wizard restarts after the channel was set up but before the codes were
+   * issued - the codes are then the only thing that happened. The record is what a support call
+   * reads, so "backup codes" is a truer answer than naming a channel nobody finished verifying.
+   */
+  public static final String CHANNEL_BACKUP_CODE = "backupCode";
+
   private EdcEnrolmentState() {
   }
 
@@ -67,6 +77,15 @@ public final class EdcEnrolmentState {
    */
   public static boolean requiresEnrolment(KeycloakSession session, PrivacyIdeaService privacyIdea,
       UserModel user) {
+    return requiresEnrolment(session, privacyIdea, user, null);
+  }
+
+  /**
+   * Client-aware overload: enrolment is required if the user hasn't completed it, or if the
+   * client's policy demands channels they don't have.
+   */
+  public static boolean requiresEnrolment(KeycloakSession session, PrivacyIdeaService privacyIdea,
+      UserModel user, ClientModel client) {
     if (user == null) {
       return false;
     }
@@ -76,8 +95,11 @@ public final class EdcEnrolmentState {
     if (!isComplete(user)) {
       return true;
     }
-    return EdcChannelDetector.hasNoUsableChannel(
-        EdcChannelDetector.detect(session, privacyIdea, user));
+    // The same rule the sign-in execution applies, asked of the same method, so the account console
+    // cannot tell someone they are set up while the next sign-in stops them for a required channel
+    // they do not have.
+    return EdcChannelDetector.enrolmentRequired(session, user,
+        EdcChannelDetector.detect(session, privacyIdea, user, client), client);
   }
 
   /** Whether the completion marker is present and readable. */

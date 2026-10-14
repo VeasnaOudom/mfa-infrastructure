@@ -1134,6 +1134,24 @@ body.login-pf,
     background: #eef1f6;
 }
 
+/* A channel this realm requires. Deliberately the same weight as the "Recommended" tag rather than
+   louder: when both appear on one row they are the same kind of statement, and a louder badge would
+   imply one of them outranks the other. */
+.edc-tag-required {
+    color: var(--edc-navy);
+    background: #e6ebf2;
+}
+
+.edc-tag-configured {
+    color: #0d6832;
+    background: #e6f4ea;
+}
+
+.edc-channels-lg .edc-option-configured {
+    opacity: 0.85;
+    background: #f8fafc;
+}
+
 .edc-channels-lg .edc-channel-name {
     font-size: 14.5px;
     font-weight: 600;

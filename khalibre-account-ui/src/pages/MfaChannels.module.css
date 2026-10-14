@@ -238,3 +238,19 @@
     justify-content: flex-end;
   }
 }
+/* A channel ICT has switched off. The row stays legible - the user has to be able to read why it is
+   dead - so only the border and the pill change, never the opacity. */
+.pillDisabled {
+  border-color: var(--edc-navy);
+  color: var(--edc-navy);
+}
+
+.cardDisabled {
+  border-color: var(--border-sidebar);
+}
+
+.disabledNote {
+  margin-top: 0.25rem;
+  color: var(--edc-navy);
+  font-size: 0.9rem;
+}

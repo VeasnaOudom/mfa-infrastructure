@@ -390,6 +390,39 @@ Three things about it that are not obvious:
   one — creating first would leave the previous set working — and returns the codes in that response
   and nowhere else.
 
+### Switching channels off for the realm (ICT)
+
+The **EDC MFA** page in the admin console (*Configure → EDC MFA*) is the supported way to do this. It
+writes two realm attributes and nothing else:
+
+```
+GET  /realms/EDC/edc-mfa-admin/channels
+POST /realms/EDC/edc-mfa-admin/channels?channels=email,telegram,totp,backupCode&required=telegram
+```
+
+`edc-mfa-enabled-channels` is the comma-separated list of channels that are on. **Absent, blank or
+unrecognised means every channel is on** — the direction that is safe to be wrong in, since a typo in
+the attribute cannot lock six thousand people out of their accounts. Turning channels off is always an
+explicit act, and at least one has to stay on: with no channel at all nobody could obtain a code.
+
+`edc-mfa-required-channels` is the subset a user must have set up. **Absent means nothing is
+required**, because demanding enrolment is not something an attribute's absence may do. A user
+satisfies the requirement by having *any one* of them, and a required channel they cannot use at all —
+Email with no address on file, Telegram with no bot configured — is not held against them: they never
+see the option either. Requiring a channel that is also switched off is refused with 409 rather than
+silently dropped, so an admin is never told a requirement is in force when it is not.
+
+Backup codes have no switch on that page: privacyIDEA issues them when a user enrols on one of the
+other three, so there is nothing to decide. The server still names a policy for them because the
+account console reads one.
+
+Switching a channel off is **not** a delete. Tokens and Telegram links are left alone, so switching it
+back on restores it for everyone instantly; the channel is withdrawn in `EdcChannelDetector.applyPolicy`,
+which is the last thing `detect()` does, so the login chooser, the OTP page, the enrolment wizard and
+the account console all agree. A user whose only remaining channel is switched off is reported as owing
+enrolment, which is the correct answer. There are server-side guards on the two ways a user could
+otherwise enrol on a switched-off channel: the wizard's `choose()` and the account console's `start()`.
+
 ### Resetting a user's MFA (ICT)
 
 ```
@@ -402,16 +435,32 @@ markers in one in-process write, and queues `edc-mfa-enrolment` again so the nex
 wizard. `deleteTokens=true` also deletes their privacyIDEA tokens. The response is a report of what
 was removed, so check it rather than assuming.
 
-The token must be **issued by `EDC`** and carry `manage-realm`:
+**No admin-console UI for this one yet.** It is being moved to a per-user screen under Users, so it
+stays curl-only for now. Everything below is what that screen will need to know about the token.
+
+The token must be **issued by `EDC`**, and its subject must be a user in `EDC` holding realm-management:
 
 * The master admin's `admin-cli` token will not work. Keycloak validates a bearer against the realm
   the provider is mounted on, and this admin has no user record in `EDC` at all. It also emits no
   role claims whatsoever, not even with `scope=roles`.
-* `manage-realm` arrives under `resource_access["realm-management"]` on a service-account token, so
-  the working setup is a **confidential client with a service account** and `realm-management` added
-  in the client's **Role mapping** tab. An end-user token is rejected with 401.
-* Granting it over REST is awkward on KC 26.1.3: `POST .../clients/{id}/default-roles` and
-  `POST .../clients/{id}/default-roles/{realm-management-id}` both 404. The Role mapping tab works.
+* **`manage-realm` is not in the token, whoever the caller is.** It is a client role of
+  `realm-management`, and the stock `roles` client scope maps
+  `resource_access.${client_id}.roles`, where `${client_id}` is the client that asked for the token.
+  So the provider resolves the token's subject and reads the role off the *user record*, which is what
+  the admin API itself does. Measured: a service account with `manage-realm` mapped through
+  `POST .../users/{id}/role-mappings/clients/{realm-management-id}` was refused until that lookup was
+  the check, and accepted after it, on the same token.
+* Granting the role over REST works for a user or a service account:
+  `POST .../users/{id}/role-mappings/clients/{realm-management-id}` with the role in the body, and
+  `DELETE` on the same collection removes it again. `POST .../clients/{id}/default-roles` and
+  `POST .../clients/{id}/default-roles/{realm-management-id}` both 404 on KC 26.1.3, so do not use
+  those; the Role mapping tab in the console works.
+* Find a service account by name, not by client: `?username=service-account-<clientId>&exact=true`.
+  `GET /admin/realms/EDC/users?clientId=<id>` answers with a *real user* instead, and granting a role
+  to whatever it returns hands a realm administrator to whoever that is.
+* An end-user token is rejected with 401. The console's own session is an `EDC` token - `AdminConsole`
+  logs in against the realm being administered, not master - so the page works; a master-realm session
+  does not.
 
 To exempt a non-human account entirely, set `edc-mfa-enrolment-exempt` = `true`. `ldap-svc` has no
 tokens and no Telegram account, so without this it would be stopped at a wizard it can never get

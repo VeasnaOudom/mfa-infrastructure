@@ -6,6 +6,7 @@ import java.util.Map;
 
 import org.jboss.logging.Logger;
 import org.keycloak.authentication.AuthenticationFlowContext;
+import org.keycloak.models.ClientModel;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.RealmModel;
 import org.keycloak.models.UserModel;
@@ -58,8 +59,10 @@ public class EdcMfaChannelsAuthenticator implements org.keycloak.authentication.
         return;
       }
 
+      ClientModel client = context.getAuthenticationSession().getClient();
+
       Map<String, String> channels =
-          EdcChannelDetector.detect(context.getSession(), privacyIdea, user);
+          EdcChannelDetector.detect(context.getSession(), privacyIdea, user, client);
       AuthenticationSessionModel authSession = context.getAuthenticationSession();
 
       // Whether this login still owes the user a set-up step, decided here rather than in the
@@ -67,7 +70,7 @@ public class EdcMfaChannelsAuthenticator implements org.keycloak.authentication.
       // answer goes into the shared map so the note, the required action and the /channels response
       // can never disagree.
       boolean enrolmentRequired =
-          EdcEnrolmentState.requiresEnrolment(context.getSession(), privacyIdea, user);
+          EdcEnrolmentState.requiresEnrolment(context.getSession(), privacyIdea, user, client);
       channels.put(NOTE_ENROLMENT_REQUIRED, enrolmentRequired ? "1" : "0");
 
       // Only once the user is known to be enrolled. While enrolment is owed the required action
@@ -91,7 +94,7 @@ public class EdcMfaChannelsAuthenticator implements org.keycloak.authentication.
 
       channels.forEach(authSession::setAuthNote);
 
-      issueChallengeCookie(context.getSession(), context.getRealm(), user);
+      issueChallengeCookie(context.getSession(), context.getRealm(), user, client);
     } finally {
       // REQUIRED pass-through: the execution never challenges, it only records state, so it must
       // always resolve the context or the flow engine dereferences a null FlowStatus.
@@ -137,7 +140,8 @@ public class EdcMfaChannelsAuthenticator implements org.keycloak.authentication.
         log.warnf("method=issueSignInCode user=%s reason=noSpassToken", username);
         return;
       }
-      EdcOtpDelivery.issue(context.getSession(), context.getRealm(), user,
+      EdcOtpDelivery.issue(context.getSession(), context.getRealm(),
+          context.getAuthenticationSession().getClient(), user,
           PrivacyIdeaSettings.resolve(context.getSession()), privacyIdea, adminToken, serial,
           context.getConnection().getRemoteAddr());
       log.infof("method=issueSignInCode user=%s serial=%s", username, serial);
@@ -152,14 +156,17 @@ public class EdcMfaChannelsAuthenticator implements org.keycloak.authentication.
    *
    * Without this the channels and resend endpoints have no way to identify the caller: Keycloak
    * resolves the authentication session only for login-action requests, so a plain REST call sees
-   * no session at all.
+   * no session at all. The client goes in with it, because those endpoints are the only place that
+   * can still work out which application's channel policy is in force.
    */
-  private void issueChallengeCookie(KeycloakSession session, RealmModel realm, UserModel user) {
+  private void issueChallengeCookie(KeycloakSession session, RealmModel realm, UserModel user,
+      ClientModel client) {
     if (challengeSecret == null || challengeSecret.isBlank()) {
       log.warn("method=issueChallengeCookie reason=noSharedSecretConfigured");
       return;
     }
-    String token = EdcChallengeToken.issue(user.getUsername(), challengeSecret, challengeTtlSeconds);
+    String token = EdcChallengeToken.issue(user.getUsername(),
+        client == null ? null : client.getClientId(), challengeSecret, challengeTtlSeconds);
     if (token == null) {
       return;
     }

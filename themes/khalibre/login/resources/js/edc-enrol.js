@@ -235,21 +235,36 @@
       timer.textContent = minutes + ":" + (seconds < 10 ? "0" + seconds : seconds);
     }
 
-    ticker = window.setInterval(function () {
+    /*
+     * Both timers together, because expiry stops both. Re-arming only the countdown leaves a freshly
+     * minted code that nothing is watching: the page looks alive and can never complete, which is
+     * what a user saw when their first code ran out - the QR visibly changed and then nothing
+     * happened for ever.
+     */
+    function arm() {
+      ticker = window.setInterval(tick, 1000);
+      poller = window.setInterval(check, 3000);
+      armSlowHint();
+    }
+
+    function tick() {
       secondsLeft -= 1;
       setTimer(secondsLeft);
       if (secondsLeft <= 0) {
         // The bot's AuthState expires with it, so a new code has to be minted rather than waited
-        // out. Stop polling first: the old state id is gone and its status will never change.
+        // out. Stop first: the old state id is gone and its status will never change.
         stop();
-        renderQr();
         if (prompt) {
           prompt.hidden = true;
         }
+        // Re-arm only once the new code exists, so the first poll cannot race the mint.
+        renderQr().then(function (minted) {
+          if (minted) {
+            arm();
+          }
+        });
       }
-    }, 1000);
-
-    poller = window.setInterval(check, 3000);
+    }
 
     function check() {
       if (checking || finished || secondsLeft <= 0) {
@@ -350,14 +365,21 @@
             backgroundOptions: { color: "#ffffff" },
             qrOptions: { errorCorrectionLevel: "M" }
           }).append(host);
+          // Reported so the caller can tell a regenerated code from a failed one - fail() has
+          // already handled the failure, and re-arming on top of it would leave a timer counting
+          // down for a QR that was never drawn.
+          return true;
         })
-        .catch(fail);
+        .catch(function (error) {
+          fail(error);
+          return false;
+        });
     }
 
     // Starting the bot is what makes it answer at all in polling mode; harmless in webhook mode.
     fetch(config.initUrl, { method: "POST" }).catch(function () { /* polling still works */ });
+    arm();
     renderQr();
-    armSlowHint();
   }
 
   function boot() {

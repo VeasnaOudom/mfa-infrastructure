@@ -11,6 +11,7 @@ import org.jboss.logging.Logger;
 import org.keycloak.broker.oidc.OAuth2IdentityProviderConfig;
 import org.keycloak.email.EmailTemplateProvider;
 import org.keycloak.email.EmailException;
+import org.keycloak.models.ClientModel;
 import org.keycloak.models.IdentityProviderModel;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.RealmModel;
@@ -48,22 +49,50 @@ public final class EdcOtpDelivery {
   }
 
   /**
-   * Writes a fresh PIN to the user's SPASS token and sends it by every available channel.
+   * Writes a fresh PIN to the user's SPASS token and sends it over the channels still permitted.
+   *
+   * <p>The channel policy is applied here rather than by the callers, because the two delivery
+   * channels are not independent: Email and Telegram share one SPASS token, so every caller that
+   * asked for "a code for this SPASS user" would otherwise have to decide which transport to use.
+   * Two of them got it wrong - the sign-in path checked only that <em>some</em> SPASS-backed channel
+   * was on and then sent by both, so switching Email off in the admin console still mailed everyone
+   * whose code was riding the token Telegram also uses.
+   *
+   * <p>{@code policyClient} is the client whose policy applies, or {@code null} for the realm default.
+   * It is a parameter on every path rather than an overload, because the failure is silent and
+   * one-directional: a caller that forgets it mails and messages over a transport an administrator
+   * switched off for that application, and nothing anywhere reports it.
+   *
+   * <p>The PIN is written either way. Whether it can be delivered is a policy question, not a reason to
+   * leave a stale code on the token: TOTP needs none, and the OTP page falls back to its resend button.
    *
    * @param serial the SPASS token to drive
+   * @param policyClient the client in whose name the user is signing in, or {@code null}
    * @param clientIp the address the request came from, shown in the mail so a user can tell an
    *     unexpected sign-in from their own
    * @return the code that was issued
    * @throws Exception if privacyIDEA would not accept the PIN, which means the code cannot work
    */
-  public static String issue(KeycloakSession session, RealmModel realm, UserModel user,
-      PrivacyIdeaSettings.Settings settings, PrivacyIdeaService privacyIdea, String adminToken,
-      String serial, String clientIp) throws Exception {
+  public static String issue(KeycloakSession session, RealmModel realm, ClientModel policyClient,
+      UserModel user, PrivacyIdeaSettings.Settings settings, PrivacyIdeaService privacyIdea,
+      String adminToken, String serial, String clientIp) throws Exception {
     String otpCode = String.format("%06d", new java.security.SecureRandom().nextInt(1000000));
     privacyIdea.setPin(serial, otpCode, adminToken);
     privacyIdea.setPinExpiry(serial, adminToken, settings.spassExpiryMinutes());
-    sendEmail(session, realm, user, settings, otpCode, clientIp);
-    sendTelegram(session, user, settings, otpCode);
+
+    String policyFor = policyClient == null ? "default" : policyClient.getClientId();
+    if (EdcChannelPolicy.isEnabled(policyClient, realm, EdcChannelPolicy.EMAIL)) {
+      sendEmail(session, realm, user, settings, otpCode, clientIp);
+    } else {
+      log.infof("method=issue username=%s client=%s message=Email channel is switched off",
+          user.getUsername(), policyFor);
+    }
+    if (EdcChannelPolicy.isEnabled(policyClient, realm, EdcChannelPolicy.TELEGRAM)) {
+      sendTelegram(session, user, settings, otpCode);
+    } else {
+      log.infof("method=issue username=%s client=%s message=Telegram channel is switched off",
+          user.getUsername(), policyFor);
+    }
     return otpCode;
   }
 

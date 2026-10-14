@@ -3,50 +3,85 @@
     <#if section = "header">
         ${msg('edc.enrol.chooseTitle')}
     <#elseif section = "form">
+        <#assign selectedChannel = "">
+        <#if telegramAvailable && !telegramConfigured && telegramRecommended>
+            <#assign selectedChannel = "telegram">
+        <#elseif totpAvailable && !totpConfigured>
+            <#assign selectedChannel = "totp">
+        <#elseif emailAvailable && !emailConfigured && hasEmailAddress>
+            <#assign selectedChannel = "email">
+        <#elseif telegramAvailable && !telegramConfigured>
+            <#assign selectedChannel = "telegram">
+        </#if>
+
         <#if error??>
-            <div class="edc-alert" role="alert">
-                <span>${msg(error!'')}</span>
-            </div>
+            <#if error = "edc.enrol.channelSetupNextRequired">
+                <div class="edc-alert" role="alert" style="background: #e6f4ea; border-color: #34a853; color: #137333;">
+                    <span>${msg(error)}</span>
+                </div>
+            <#else>
+                <div class="edc-alert" role="alert">
+                    <span>${msg(error!'')}</span>
+                </div>
+            </#if>
         </#if>
         <p class="edc-otp-subtitle">${msg('edc.enrol.chooseIntro')}</p>
 
         <#-- Saying why a channel is unavailable matters more than hiding it. This is a
              deployment where most staff have no email address at all: offering email and then
              sending nothing is how a mandated change turns into a queue at the ICT desk. -->
-        <#if !emailAvailable && telegramAvailable>
+        <#if !hasEmailAddress && telegramAvailable>
             <div class="edc-note-info">
                 <span>${msg('edc.enrol.noEmailNote')}</span>
             </div>
         </#if>
-        <#if !telegramAvailable && !emailAvailable>
+        <#-- One dead-end message, not two. A second alert used to fire on
+             "!telegramAvailable && !emailAvailable && totpAvailable" - which is precisely the case
+             where the authenticator app IS the one option on screen. It told a user who was looking at
+             a working row that "No verification channel can be set up on this account", which is the
+             one thing the page could not have meant: it is what a per-application policy restricting
+             an application to the authenticator app produces, so every administrator who switched
+             Telegram and Email off saw a user told there was nothing to do while sitting in front of
+             the one channel that was available.
+             There is no second reason to distinguish. Anything still available is offered; when
+             nothing is, "every method has been switched off" is the accurate account of it, and a
+             user with no address of their own is already covered by the note above. -->
+        <#if !anyChannelAvailable>
             <div class="edc-alert" role="alert">
-                <span>${msg('edc.enrol.noChannelConfigured')}</span>
+                <span>${msg('edc.enrol.allChannelsDisabled')}</span>
             </div>
         </#if>
 
+        <#if anyChannelAvailable>
         <form id="edc-enrol-form" action="${url.loginAction}" method="post">
             <div class="edc-channels edc-channels-lg" role="radiogroup"
                  aria-label="${msg('edc.enrol.chooseIntro')}">
                 <#if telegramAvailable>
-                    <label class="edc-option">
+                    <label class="edc-option<#if telegramConfigured> edc-option-configured</#if>">
                         <span class="edc-channel-ico">
                             <img src="${url.resourcesPath}/img/telegram.svg" width="18" height="18" alt="">
                         </span>
                         <span class="edc-channel-body">
                             <span class="edc-channel-name">
                                 ${msg('edc.enrol.telegram')}
-                                <#if telegramRecommended>
+                                <#if telegramConfigured>
+                                    <span class="edc-tag edc-tag-configured">${msg('edc.enrol.configured')}</span>
+                                <#elseif telegramRecommended>
                                     <span class="edc-tag">${msg('edc.enrol.recommended')}</span>
+                                </#if>
+                                <#if requiredChannels?seq_contains("telegram")>
+                                    <span class="edc-tag edc-tag-required">${msg('edc.enrol.required')}</span>
                                 </#if>
                             </span>
                             <span class="edc-channel-detail">${msg('edc.enrol.telegramDetail')}</span>
                         </span>
                         <input class="edc-option-input" type="radio" name="channel" value="telegram"
-                               <#if telegramRecommended>checked</#if>>
+                               <#if telegramConfigured>disabled<#elseif selectedChannel = "telegram">checked</#if>>
                     </label>
                 </#if>
 
-                <label class="edc-option">
+                <#if totpAvailable>
+                <label class="edc-option<#if totpConfigured> edc-option-configured</#if>">
                     <span class="edc-channel-ico">
                         <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor"
                              stroke-width="2" aria-hidden="true">
@@ -55,14 +90,27 @@
                         </svg>
                     </span>
                     <span class="edc-channel-body">
-                        <span class="edc-channel-name">${msg('edc.enrol.totp')}</span>
+                        <span class="edc-channel-name">
+                            ${msg('edc.enrol.totp')}
+                            <#if totpConfigured>
+                                <span class="edc-tag edc-tag-configured">${msg('edc.enrol.configured')}</span>
+                            </#if>
+                            <#if requiredChannels?seq_contains("totp")>
+                                <span class="edc-tag edc-tag-required">${msg('edc.enrol.required')}</span>
+                            </#if>
+                        </span>
                         <span class="edc-channel-detail">${msg('edc.enrol.totpDetail')}</span>
                     </span>
                     <input class="edc-option-input" type="radio" name="channel" value="totp"
-                           <#if !telegramAvailable>checked</#if>>
+                           <#if totpConfigured>disabled<#elseif selectedChannel = "totp">checked</#if>>
                 </label>
+                </#if>
 
-                <label class="edc-option<#if !emailAvailable> edc-option-off</#if>">
+                <#-- Permission and address are different questions. No address is this person's own
+                     problem and the row explains it; switched off is an administrator's decision, so
+                     the row is simply not drawn. -->
+                <#if emailAvailable>
+                <label class="edc-option<#if !hasEmailAddress> edc-option-off<#elseif emailConfigured> edc-option-configured</#if>">
                     <span class="edc-channel-ico">
                         <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor"
                              stroke-width="2" aria-hidden="true">
@@ -73,17 +121,24 @@
                     <span class="edc-channel-body">
                         <span class="edc-channel-name">
                             ${msg('edc.enrol.email')}
-                            <#if !emailAvailable>
+                            <#if emailConfigured>
+                                <span class="edc-tag edc-tag-configured">${msg('edc.enrol.configured')}</span>
+                            </#if>
+                            <#if requiredChannels?seq_contains("email")>
+                                <span class="edc-tag edc-tag-required">${msg('edc.enrol.required')}</span>
+                            </#if>
+                            <#if !hasEmailAddress>
                                 <span class="edc-tag edc-tag-off">${msg('edc.enrol.unavailable')}</span>
                             </#if>
                         </span>
                         <span class="edc-channel-detail">
-                            <#if emailAvailable>${msg('edc.enrol.emailDetail')}<#else>${msg('edc.enrol.noEmailDetail')}</#if>
+                            <#if hasEmailAddress>${msg('edc.enrol.emailDetail')}<#else>${msg('edc.enrol.noEmailDetail')}</#if>
                         </span>
                     </span>
                     <input class="edc-option-input" type="radio" name="channel" value="email"
-                           <#if !emailAvailable>disabled</#if>>
+                           <#if !hasEmailAddress || emailConfigured>disabled<#elseif selectedChannel = "email">checked</#if>>
                 </label>
+                </#if>
             </div>
 
             <div class="${properties.kcFormGroupClass!}">
@@ -92,5 +147,6 @@
                 </button>
             </div>
         </form>
+        </#if>
     </#if>
 </@layout.registrationLayout>

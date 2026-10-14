@@ -12,10 +12,33 @@ obvious from the code** and that cost real debugging time.
   "valid-looking" code that failed only at runtime.
 * **Assert on scripted edits.** Several silent no-op `str.replace()` calls left broken code behind
   because the anchor had drifted. Wrap replacements and check.
-* **Do not create test users in realm `EDC`.** The realm federates to LDAP with
-  `editMode=Writable` and `syncRegistrations=true`, so user writes propagate to Active Directory.
-  Creating a user once wrote `cn=Otp Test` into AD and failed halfway. Temporary *clients* are
-  safe. If a user must be created, delete it and confirm with a full LDAP sync.
+* **Realm `EDC` is self-contained and must stay that way.** It used to federate to an Active
+  Directory at `Window-Server-22.khalibre-ad-lab.crosswired.me`, which this deployment has no route
+  to. It was removed on 2026-10-13 - see *This realm has no directory server*. Two ground rules
+  below were written for the federated realm and no longer hold; the current state is:
+  * **Never point realm `EDC` at an LDAP/AD provider whose reachability is unverified.** Every
+    credential check then rides that connection, so an unreachable directory turns *every* sign-in
+    into `invalid_user_credentials` - indistinguishable from a wrong password, and for a long time
+    mistaken for one. It also breaks privacyIDEA, whose user resolver enumerates the realm and
+    answers `400` on every `/token/` call, so MFA can never be satisfied.
+  * **Creating users in `EDC` is safe now.** It was not: with `editMode=WRITABLE` and
+    `syncRegistrations=true` a user write propagated into AD, and creating one once wrote
+    `cn=Otp Test` into the directory and failed halfway. Both were set to `READ_ONLY` / `false`
+    before unlinking, and the provider itself is gone, so there is nothing left to write through.
+    Temporary *clients* remain safe.
+* **Password hashes cannot be written by hand, and the format is argon2, not PBKDF2.** Keycloak 26
+  stores `SECRET_DATA` as JSON `{"value","salt","additionalParameters"}` with the parameters in
+  `CREDENTIAL_DATA` as
+  `{"hashIterations":5,"algorithm":"argon2","additionalParameters":{"hashLength":["32"],"memory":["7168"],"type":["id"],"version":["1.3"],"parallelism":["1"]}}`.
+  A `secret_data` copied from another realm will not verify unless the algorithm matches. BouncyCastle
+  1.78.1 (already in the Keycloak image) reproduces it byte-for-byte via
+  `Argon2BytesGenerator` - and the check that the reproduction is right is to verify it against the
+  master `admin` credential, whose plaintext is in `.env`. Guessing iterations is not a shortcut
+  that fails visibly; it fails as `invalid_user_credentials`.
+* **A direct-grant test is not available on this realm.** No client has
+  `directAccessGrantsEnabled`, so a password can only be exercised through the browser flow, which
+  needs PKCE - the admin console clients 400 with `Missing parameter: code_challenge_method`
+  otherwise.
 
 ## Keycloak platform constraints
 
@@ -43,11 +66,33 @@ These are Keycloak/PrivacyIDEA behaviours, not project choices.
   a 401 from a provider mounted on `EDC`. Consequence for any admin-only endpoint here: the caller
   needs an **EDC** account holding realm-management, and the master admin - who has no user record
   in `EDC` at all - cannot be the caller.
-* **`manage-realm` arrives in two different places, and both must be read.** It is a *client* role of
-  `realm-management`, so on a user token it is under `resource_access["realm-management"]`, while a
-  service-account token carries the same authority in `realm_access`. Checking only one rejects half
-  the legitimate callers. Note the master admin here emits **no** role claims at all - not even with
-  `scope=roles` - so `isUserInRole` is never a usable gate on its own.
+* **`manage-realm` is never in a token on this realm, so no provider here can gate on token claims.**
+  Measured, and it is the default configuration rather than anything odd: `manage-realm` is a *client*
+  role of `realm-management`, and the stock `roles` client scope maps
+  `resource_access.${client_id}.roles`, where `${client_id}` is the client that *asked for the token* -
+  never `realm-management`. So `resource_access` carries only the requesting client's own roles, and
+  `realm_access` carries realm roles only. Confirmed on a service account that had `manage-realm`
+  mapped through the admin API: `realm_access` was `default-roles-mfa` and friends, with nothing about
+  realm-management anywhere, on two consecutive tokens.
+  The fix is the admin API's own rule - resolve the token's subject as a user in this realm and read
+  the realm-management roles off the user record with `UserModel.hasRole`, which also expands
+  composites and group memberships:
+  ```java
+  ClientModel rm = realm.getClientByClientId("realm-management");
+  user.hasRole(rm.getRole("manage-realm")) || user.hasRole(rm.getRole("admin"))
+  ```
+  A provider that reads the claims instead refuses every admin-console session, i.e. the only caller
+  it exists for, while still refusing automation. `EdcMfaAdminResource.isIct` does the user lookup and
+  keeps the claim check only as a widening fallback. A token with no user record here is refused, which
+  is the master admin - see the note above.
+* **A realm resource provider is not reachable under `/admin/realms/…`.** `AdminRoot` and
+  `RealmAdminResource` answer from a fixed list of resources and never consult the realm's
+  `RealmResourceProviderFactory`s, so `/admin/realms/<realm>/<provider-id>/…` is a **404 whatever
+  token it carries** - and the admin console's own `fetchAdminUI` builds exactly that shape, so it is
+  an easy thing to copy. The mounted path is `/realms/<realm>/<provider-id>/…`. `EdcMfaAdminResource`
+  was reached at the admin-shaped URL for a whole build cycle before this was measured; the symptom is
+  indistinguishable from a provider that was never deployed, so check the URL before re-registering
+  anything.
 * **Several role-scoping and required-action admin paths 404 on KC 26.1.3.** Confirmed 404:
   `PUT`/`DELETE .../users/{id}/required-actions` (and `.../required-actions/{alias}`), and both
   `POST .../clients/{id}/default-roles` and `POST .../clients/{id}/default-roles/{realm-management-id}`.
@@ -109,6 +154,26 @@ These are Keycloak/PrivacyIDEA behaviours, not project choices.
 
 ## This realm's specifics
 
+* **This realm has no directory server.** It is deliberately self-contained: local Keycloak
+  accounts only, no LDAP/AD federation, since the AD server it pointed at
+  (`Window-Server-22.khalibre-ad-lab.crosswired.me`, reachable only at a VPN address hard-coded in
+  `docker-compose.yml`) is not routable from here. What that removal changed, and what it did not:
+  * Sign-in no longer touches LDAP, so `invalid_user_credentials` now means what it says.
+  * **privacyIDEA's `KeycloakResolver` was the other victim, and the more confusing one.** It
+    enumerates realm `EDC` users through the Keycloak admin API, so while a dead LDAP provider was
+    attached every `/token/` call answered `400`. That made `EdcChannelDetector` read every account
+    as holding no tokens, withdrew Telegram, and demanded enrolment from users who had already
+    enrolled. With the provider removed, token lookups succeed again.
+  * `EdcChannelDetector.anotherUserHolding` logged a WARN per login while LDAP existed, because its
+    uniqueness check calls `searchForUserByAttributeStream`, which went through the federated
+    provider - slow and futile. It should no longer appear in the log; if it does, a provider has
+    been reattached.
+* **Every `EDC` account shares one local password**, set when the realm was detached on 2026-10-13.
+  They exist so the realm is usable without a directory; they are not production identities.
+  Rotate or delete them before this goes anywhere real.
+* **A direct-grant test is not available on this realm.** No client enables
+  `directAccessGrantsEnabled`, so a password can only be exercised through the browser flow, which
+  needs PKCE. See *Verification notes*.
 * **Realm is `EDC`** (renamed from `mfa`). Update anything referencing the old name: the privacyIDEA
   resolver, and `pirealm`/`piservicerealm` on the `privacyidea-authenticator` config. There is no
   longer an event handler URL to update — see *Codes were deliverable exactly once per token*.
@@ -126,6 +191,146 @@ These are Keycloak/PrivacyIDEA behaviours, not project choices.
 * **`PI_ADMIN_PASSWORD` is the privacyIDEA superuser** and is what the channel detector
   authenticates with. It should become a least-privilege service account.
 * **Creating local test clients is safe; creating local test users is not** (see Ground rules).
+
+## The channel policy (ICT's on/off switch)
+
+`EdcChannelPolicy` is one realm attribute, `edc-mfa-enabled-channels`, holding the comma-separated
+list of channels that are on. Absent, blank or unrecognised means **all four on**: the direction that
+is safe to be wrong in, since a typo in the attribute cannot lock six thousand people out. A second
+attribute, `edc-mfa-required-channels`, says which of them a user must have set up. The admin page is
+*Configure → EDC MFA* in the EDC console (`khalibre-admin-ui/`); see *The admin console*.
+
+The page offers the three channels a user chooses between. **Backup codes are not on it**: privacyIDEA
+issues them when a user enrols on one of the three, so there is no decision for an administrator to
+make about them. The server still names a policy for them, because `EdcChannelPolicy` has four
+channels and the account console needs to read one.
+
+* **Applied in detection, not in each reader.** `EdcChannelDetector.applyPolicy` is the last thing
+  `detect()` does, so the login chooser, the OTP page, the enrolment wizard and the account console
+  all get the same answer. Disagreement in that direction is a bypass: a channel one screen still
+  offers is a channel a user can enrol on. Two server-side guards back it up on the paths a user can
+  POST to - the wizard's `choose()` and the account console's `start()`.
+* **Applied at delivery too, which is where it was missed.** Email and Telegram ride **one** `spass`
+  token, so `issueSignInCode` could only ask "is some spass-backed channel on?" and
+  `EdcOtpDelivery.issue` then sent by *both* transports. Switching Email off withdrew it from every
+  screen and still mailed everyone:
+
+  ```
+  04:05:13  setChannels channels=telegram,totp,backupCode status=SUCCESS
+  04:05:29  applyChannelPolicy enabled=[telegram, totp, backupCode]
+  04:05:32  sendEmail   status=SENT username=domkz     <- the bug, two seconds after the policy applied
+  04:05:33  sendTelegram status=SENT username=domkz
+  ```
+
+  `issue` now asks `EdcChannelPolicy` per transport, so every caller - sign-in, enrolment, `/resend` -
+  obeys it without having to know it exists. The PIN is still written when both are off: whether it
+  can be delivered is a policy question, not a reason to leave a stale code on the token.
+* **Non-destructive, on purpose.** Tokens and Telegram links are untouched, so switching a channel back
+  on restores it for everyone instantly. The alternative would make a toggle into a mass delete of
+  people's second factors, and on this realm those writes are the ones that cannot be undone through
+  the admin REST API.
+* **A user who has a switched-off channel keeps it, and is told.** `active` in
+  `GET /edc-mfa-settings/channels` is the answer *after* the policy, so `configured` (the user's own
+  token) and `switchedOff` (ICT's decision) were added to tell "switched off" from "never set up".
+  Without them a channel vanishes from the account page, which reads as the user's setup having been
+  deleted - the one interpretation guaranteed to send them to the help desk.
+* **A second attribute carries "required", and it is not a stronger "enabled".**
+  `edc-mfa-required-channels` is a separate realm attribute, and an absent one means **nothing is
+  required**, which is the only safe reading: demanding enrolment is not something an attribute's
+  absence may do. A channel can be available without being demanded. Two rules keep the pair
+  coherent, both on read in `EdcChannelPolicy.required` and on write in `setChannels`:
+  * **Required is a subset of enabled.** A required channel that is switched off is dropped on read,
+    with a WARN, so a realm cannot demand a second step it has also forbidden - and the admin page
+    refuses that combination outright (409) rather than silently dropping it, because silently
+    dropping is how an admin would believe a requirement is in force when it is not.
+  * **Satisfied by all of them, not by any one.** `EdcChannelDetector.requiredPending` returns true
+    while a user lacks *any* required channel, and `EdcEnrolmentState.requiresEnrolment` asks that
+    same method, so the account console cannot call somebody set up while the next sign-in stops them.
+    Two required channels means two enrolments: `EdcMfaEnrolmentRequiredAction.channelEnrolled`
+    re-derives the answer after each one and bounces the user back to the chooser until the set is
+    complete. Reading it as "any one of them" would let a requirement be satisfied by a channel
+    somebody set up for an unrelated reason, which is the whole difference between "must have a
+    second step" and "must have these two".
+  * **A required channel the user cannot use is not held against them.** `requiredPending` skips a
+    required channel that is *unreachable for that person*: Email with no address on file, Telegram
+    with no bot configured. Demanding enrolment for something they cannot even see offered would put
+    people into a wizard they cannot leave. Note the deliberate asymmetry - a user with a Telegram link
+    but no SPASS token reads as Telegram inactive and *does* still count as pending, because that is
+    the state they are meant to fix by linking one.
+  * **Backup codes are never a pending requirement**, even if a stored attribute names them. The
+    wizard issues the TAN token as its *last* step, so a wizard that waited on one would be waiting
+    on a channel it will not produce until it stops waiting - nobody would ever finish enrolling.
+    `EdcChannelDetector.usableBy` returns false for `backupCode` to make that impossible, and
+    `EdcChannelPolicy.isSatisfiable` refuses at write time to store a policy whose enabled set is
+    `backupCode` alone, since the chooser would then render with no rows at all.
+  * **The "Required" badge comes from the pending set, not the stored one.**
+    `EdcChannelDetector.pendingRequiredChannels` returns the outstanding channels and
+    `EdcMfaEnrolmentRequiredAction.renderChoose` hands that to the template as `requiredChannels`.
+    Passing the stored list instead put a Required badge beside a row greyed out as Unavailable -
+    email required, no address on file - telling the user to do something the server would then
+    refuse. The badge and the exemption have to come from one rule or they contradict each other on
+    the one screen where the user is being asked to act.
+* **`EdcChannelPolicy.parse` and `EdcChannelPolicy.required` deliberately disagree on nonsense.**
+  `parse` treats an unrecognisable stored value as "everything enabled"; `required` treats an
+  unrecognisable one as "nothing required". Both are the safe direction for the attribute they read,
+  and mixing them up is how a typo could either lock everyone out or let everyone through.
+
+### Per-application policy
+
+One application - one Keycloak client - may carry its own policy, in the **same two attribute
+names** stored on the client instead of the realm. A client with neither set inherits the realm's.
+`enabledFor` / `requiredFor` / `hasOwnPolicy` in `EdcChannelPolicy` are the whole mechanism; there is
+no second store and no second rule. `GET/POST /realms/EDC/edc-mfa-admin/channels` takes an optional
+`client` parameter, and the admin console's **Applications** tab drives it.
+
+* **`account-console` is configurable, and it is the only built-in that is.** It is the client the
+  account console authenticates with, so a policy on it is exactly what governs the self-service MFA
+  page. An earlier version of these notes claimed built-in clients could not hold a policy because
+  "the server owns those rows and would overwrite them". That was **measured and it is false**:
+  `edc-mfa-*` attributes written on `account-console` survived two full restarts untouched. Keycloak
+  creates built-in clients once and never reconciles their attributes.
+* **The excluded ids are excluded because their channels are never read, not because they are
+  built-in.** `account` and `realm-management` are resource servers — a token names them as `aud`,
+  never `azp` — and `admin-cli` / `broker` never run the browser MFA flow. A policy on any of them
+  would be stored, appear in the admin table, and do nothing. The test in `BUILT_IN_CLIENT_IDS` is
+  therefore "can this id ever be the `azp` of a token whose channels are inspected", which is why
+  `security-admin-console` stays out: its sessions never reach `EdcMfaSettingsResource`.
+* **Consequence: the self-service page is the one surface a per-client policy really governs.** A
+  policy on `account-a` shapes that application's sign-in flow; a policy on `account-console` shapes
+  the MFA settings page itself. Both resolve through `enabledFor` / `requiredFor` and nothing else.
+* **An override that sets only the enabled list means the second step is optional.** It does *not*
+  fall back to the realm's required list. Inheriting a requirement the application never asked for is
+  the more damaging of the two mistakes, because it stops people signing in to that application and
+  the application is not the thing anyone goes to look at.
+* **Either attribute alone counts as an override**, because one without the other is a half-finished
+  edit and an application should never look configured while behaving as though it were not.
+* **A policy must leave at least one channel a user could actually choose.** `isSatisfiable` refuses
+  `backupCode` alone at write time: backup codes are issued by the wizard itself, so that chooser
+  would render with no rows and the wizard would dead-end. This is separate from the
+  "not empty" refusal in `serialise` - an empty set and a one-row set are both unusable, for
+  different reasons.
+* **The client has to be carried to every reader, and the sign-in flow is the one place it is
+  genuinely hard to get.** Three of them are non-obvious:
+  * `EdcMfaChannelsAuthenticator` takes it from `context.getAuthenticationSession().getClient()`.
+  * `EdcMfaSettingsResource` from the token's `azp` (`getIssuedFor()`), resolved **once** per request.
+    The audience is `account` for every console session and names no policy. On the stock console
+    this resolves to `account-console`, which is why that id being configurable is what makes a
+    per-application switch reach the self-service page at all - and why `start()` has to check the
+    same client rather than the realm default, or the one path that writes a token is unenforced.
+  * `PrivacyIdeaWebhookResource` has neither: `/channels`, `/resend` and `/telegram-link` are plain
+    REST calls with no authentication session and no token. `EdcChallengeToken` therefore carries
+    the client id in its signed payload, and `refreshChallengeCookie` has to carry it across - the
+    cookie is replaced wholesale on resend, so re-issuing it without the client would silently
+    reset that browser to the realm default for the rest of the sign-in, exactly when the channel
+    list matters most.
+* **`EdcOtpDelivery.issue` takes the client as a parameter rather than as an overload.** The failure
+  mode of forgetting it is silent and one-directional: the mail still goes out over a transport an
+  administrator switched off for that application, and nothing anywhere reports it.
+* **`security-admin-console` is not configurable today, and that is arguably the gap worth
+  discussing.** Requiring MFA for the admin console is a real control, and it would work through the
+  sign-in path the same way any other client's does - the reason it is excluded is only that its
+  sessions never read `EdcMfaSettingsResource`. If ICT wants it, the change is to
+  `BUILT_IN_CLIENT_IDS` plus deciding what "no channels configured" should mean for an operator.
 
 ## MFA flow
 
@@ -227,6 +432,13 @@ what backup codes are, and it is already single-use.
   hand over only what this step is allowed to show.
 * **Wizard position has to survive a GET.** A "choose a different method" button is a POST with a
   back flag, not a link: a GET re-reads the step note unchanged and puts the user straight back.
+* **A step must be able to render itself from nothing.** The wizard's position lives in auth notes,
+  which a browser refresh loses, and `startingStep` can route into the backup-codes step from a cold
+  start. `renderBackupCodes` therefore *issues* a set when the session has none, rather than treating
+  that as an error. It used to clear the enrolment and bounce to the chooser, which is a dead end
+  whenever the only required channel is one the user has already set up: choosing it leads straight
+  back to the same step. Marking the authenticator app required turns that into a trap for exactly
+  the users it was meant to catch, and the only symptom is "Something went wrong setting that up".
 * **A screen can render `#edc-qr` and still show no QR.** `initTotpQr()` returns silently when
   `QRCodeStyling` is undefined, and `edc-mfa-enrol-code.ftl` - the screen behind both "Authenticator
   app" and "Email" - did not load the library at all, so the authenticator step showed an empty
@@ -389,9 +601,15 @@ Known-dead, still in the tree, safe to clear in a follow-up rather than as part 
 * **The Telegram bot has to be re-armed after every Keycloak restart.** `postInit` is deliberately a
   no-op, so nothing starts it; the symptom is a silent one - the bot simply is not polling, and the
   first code "not arriving" looks like a delivery bug rather than a bot that never started. No log
-  line says so. Call `POST /realms/EDC/telegram-auth/telegram/init` after any restart and expect
-  `[TelegramBotManager] Started polling for bot: telegram`. This is worth automating into the
-  compose healthcheck or the restart task; it is not currently.
+  line says so. `mise run telegram:init` waits for the server and POSTs
+  `/realms/<realm>/telegram-auth/telegram/init`, expecting
+  `[TelegramBotManager] Started polling for bot: telegram`; it is idempotent, and every task that
+  restarts Keycloak (`start:keycloak`, `deploy:keycloak-provider`, `deploy:admin-ui`,
+  `deploy:khalibre-account-ui`) calls it. A bare `docker restart mfa-keycloak` still needs it by hand.
+  What it looks like when it is missed: the scan state sits at `WAITING_SCAN chat=null` and the
+  provider logs `NoStoredState`/`Expired` while nothing is listening at all - Telegram queues the
+  `/start` update, and the bot answers `NoSuchScan` when it finally comes up, because the state has
+  aged out in the meantime.
 * **`GET /telegram-auth/status` used to 500 on a plain REST call.** `AuthStateSession.getAuthStateId`
   passed a null session id into `singleUseObjects().get()`, which throws rather than returning
   nothing. A request with no root authentication session has no session id, so this was the normal
@@ -412,6 +630,70 @@ rules are correct. Two of them have already shipped broken:
 The cheap manual substitute is a sign-in for each of the three channels plus the checks named on the
 individual rules above. `hasNoUsableChannel` and `withdrawUndeliverableTelegram` are static methods
 over a plain `Map`, so they can be exercised from a scratch main class in seconds if that is wanted.
+
+## The admin console
+
+`khalibre-admin-ui/` is a second theme module: the **stock admin console plus one page**, the EDC MFA
+channel switches, mounted as a new item in the Configure group. It is what yesterday's backend half -
+`EdcChannelPolicy` plus `GET/POST /realms/EDC/edc-mfa-admin/channels` - is for.
+
+* **There is no plugin hook, so this is a scripted patch of a pinned checkout.** `scripts/patch-admin-ui.mjs`
+  copies `src/mfa/` into `build/keycloak-26.1.3/js/apps/admin-ui/src/khalibre/` and edits three files:
+  `src/routes.tsx` (import + spread into the route array), `src/PageNav.tsx` (one `LeftNav`), and
+  `vite.config.ts` (the outDir). Each edit replaces an exact anchor and asserts it was found, and each
+  is skipped when the file already carries the marker, so the task is re-runnable. `mise run
+  build:khalibre-admin-ui` fetches the pinned source on first use and then builds; `deploy:admin-ui`
+  builds and restarts. An upgrade is a version bump plus re-running the script.
+* **The page source is copied in-tree rather than aliased.** Vite resolves a bare specifier by walking
+  up from the *importing file*, and the imports are resolved from `apps/admin-ui/node_modules` - which a
+  file outside that tree cannot find, since `khalibre-admin-ui/node_modules` is never installed (the
+  build runs inside the checkout). In-tree also means the console's own tsconfig covers the page, and
+  `vite build` carries `vite-plugin-checker`, so **`npm run build` in the checkout is what type-checks
+  this page** under `strict: true`. There is no standalone typecheck for it.
+* **The admin console is PatternFly 5**, like the login theme's v4/v3 chain a third version apart -
+  `Modal` takes `title`/`actions` rather than `ModalBoxHeader`, and `Switch` takes `label`/`labelOff`.
+  Check the pinned checkout's `package.json` before copying an idiom from either other console.
+* **The console logs in against the realm it is administering, not master** - `AdminConsole.java`
+  binds `loginRealm` to `realm.getName()`, and each realm has its own `security-admin-console` client.
+  So the page's token is an `EDC` token, which is what `EdcMfaAdminResource` needs; a master-admin
+  session (the usual cross-realm way to reach another realm's console) is refused by it, and shows up
+  as the page's own error rather than a 404.
+* **`GET /admin/realms/EDC/users?clientId=<id>` does not find the service account.** It answers with a
+  *real user* - granting a role to whatever it returns hands a realm administrator to somebody at
+  random, and the grant looks like it worked. Ask for the service account by name:
+  `?username=service-account-<clientId>&exact=true`. This was done by accident here and revoked in the
+  same sitting; `USER_ROLE_MAPPING` is the check afterwards.
+* **Which theme a realm's console gets is the realm's `adminTheme` column**, set with `PUT
+  /admin/realms/<realm>` or SQL - there is no `spi-theme-default-admin`, and `DefaultThemeSelectorProvider`
+  reads `realm.getAdminTheme()` for `Theme.Type.ADMIN`. `EDC` is set to `khalibre-admin`; `master` is
+  left alone on `keycloak.v2`. It lives in the database, so a restored PROD backup carries it - and a
+  backup taken before this was written does not.
+* **The page's messages are served by the same theme**, so they are not baked in at build time:
+  `GET /resources/<realm>/admin/<locale>` merges the whole parent chain with the child last, which is
+  why `messages_en.properties` under `maven-resources/theme/khalibre-admin/admin/messages/` is the only
+  one needed and every stock string still resolves. A missing key renders as the key itself, with no
+  error - so a sidebar row that is not there is nearly always a missing or misspelled key.
+* **A `LeftNav` entry whose path matches no route renders nothing at all**, silently. The match strips
+  `/:param` segments off the route path and compares the rest, so the route `/:realm/edc-mfa` needs
+  `path="/edc-mfa"`, and the route has to be in the array or the row is just gone.
+* **Both nav groups are gated on *view* roles, and `hasAccess` implies nothing.** `PageNav` computes
+  `showManage` and `showConfigure` from `hasSomeAccess("view-realm", "query-clients", …)`, and
+  `AccessContextProvider.hasAccess` is a flat `access.includes(type)` - so an account holding *only*
+  `manage-realm`, which is all this page needs, renders **no sidebar at all**, not even an empty
+  Configure group. Adding a row to an existing group is therefore not sufficient for a page gated on
+  `manage-realm`; `manage-realm` was added to the `showConfigure` set by the patch script. The Manage
+  group was left alone, on purpose: this page administers no users or clients.
+  `manage-realm` also does not imply `view-realm` anywhere else either, so an ICT account granted
+  just the one role gets a Configure group containing exactly one item. Grant `view-realm` as well if
+  the console around it is meant to be usable.
+* **A patch script that skips a whole file will skip any edit added to it later.** The first version
+  keyed idempotency on the file carrying the marker, so the second PageNav edit was silently dropped
+  on an already-patched checkout - which is how the nav bug above shipped into a build that reported
+  success. `patch()` now tests each edit's own replacement text, so edits are independent.
+* **The console build is not reversible by reverting the JAR.** `deploy:admin-ui` replaces the whole
+  console bundle, so a broken build breaks every admin screen for that realm. Check
+  `GET /admin/EDC/console/` (does it still 200 and is the resource URL under `khalibre-admin`?) and the
+  entry script and page chunk (200) before restarting with it.
 
 ## The account console
 
@@ -502,10 +784,11 @@ from the marker.
 * **A missing group must not fail enrolment.** `markComplete` writes the marker and removes the
   required action regardless, and the group step logs a warning naming the group it could not find.
   A blank `enrolmentGroup` falls back to `MFA` rather than joining nothing and reporting success.
-* **Only service-account tokens carry role claims on this realm.** A password-grant token from
-  `admin-cli` - master *or* EDC - arrives with no `realm_access` and no `resource_access`, whatever
-  roles the user holds. That is why the reset endpoint cannot be exercised with a user token, and
-  why granting `manage-realm` to a user and expecting it in the token wastes time.
+* **A realm-management role is exercised through the user record, not the token.** Granting one with
+  `POST .../users/{id}/role-mappings/clients/{realm-management-id}` and calling the endpoint with that
+  user's token works; the claim-based check that used to sit there could not ever have passed. Grant
+  the *service account* of a temporary client for automated checks - see the note in *The admin
+  console* about how to find one, because the obvious way returns a real person instead.
 
 ## Unenrolled users
 
@@ -667,7 +950,15 @@ from the marker.
   bugs this caught: intervals stacking on every resend, and duplicate submissions. Note that
   `formResult` is declared by an inline `<script>` in `privacyIDEA.ftl`, not in the JS file, so a
   stub must supply it.
-* The OTP page is only reachable after valid AD credentials, so browser verification of it needs a
-  real user. Automated checks cannot replace it. Driving the forgot-password flow end to end does
-  not need credentials: create a temporary public client with `redirectUris: ["*"]`, bind it to the
-  `PrivacyIDEA` flow, and follow the reset link. Delete the client afterwards.
+* The OTP page is only reachable after valid credentials, so browser verification of it needs a real
+  user. Automated checks cannot replace it. To check that a password works without a browser, drive
+  the browser flow from curl rather than the token endpoint: no client here allows direct grant, so
+  `grant_type=password` answers `invalid_client` or `unauthorized_client`, and the admin console
+  additionally demands PKCE (`Missing parameter: code_challenge_method`) or it answers
+  `invalid_request`. What worked was `GET /realms/EDC/protocol/openid-connect/auth` with
+  `code_challenge`/`code_challenge_method=S256` and a cookie jar, then POST the login form with
+  `username` and `password`; the landing URL tells you the result — `login-actions/required-action`
+  or the OTP page means the password was accepted, a bounce back to `login-actions/authenticate`
+  means it was not. Driving the forgot-password flow end to end is another option: create a
+  temporary public client with `redirectUris: ["*"]`, bind it to the `PrivacyIDEA` flow, and follow
+  the reset link. Delete the client afterwards.

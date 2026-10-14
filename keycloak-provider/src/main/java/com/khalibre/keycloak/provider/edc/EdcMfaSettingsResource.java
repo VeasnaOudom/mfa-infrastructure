@@ -1,10 +1,14 @@
 package com.khalibre.keycloak.provider.edc;
 
+import com.khalibre.keycloak.provider.account.AccountConsoleCaller;
+import com.khalibre.keycloak.provider.privacyIdea.PrivacyIdeaSettings;
+import com.khalibre.keycloak.provider.privacyIdea.service.PrivacyIdeaService;
+import com.khalibre.keycloak.provider.telegram.bot.TelegramBotClient;
+import com.khalibre.keycloak.provider.telegram.idp.TelegramIdentityProvider;
+import com.khalibre.keycloak.provider.telegram.state.AuthState;
+import com.khalibre.keycloak.provider.telegram.state.AuthStateCache;
+import com.khalibre.keycloak.provider.telegram.state.AuthStateSession;
 import com.khalibre.keycloak.provider.util.FederatedIdentity;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.GET;
 import jakarta.ws.rs.NotAuthorizedException;
@@ -17,26 +21,20 @@ import jakarta.ws.rs.core.HttpHeaders;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.core.UriInfo;
-
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import org.jboss.logging.Logger;
+import org.keycloak.broker.oidc.OAuth2IdentityProviderConfig;
 import org.keycloak.events.Event;
 import org.keycloak.events.EventStoreProvider;
 import org.keycloak.events.EventType;
-import org.keycloak.broker.oidc.OAuth2IdentityProviderConfig;
+import org.keycloak.models.ClientModel;
 import org.keycloak.models.IdentityProviderModel;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.RealmModel;
 import org.keycloak.models.UserModel;
 import org.keycloak.utils.StringUtil;
-
-import com.khalibre.keycloak.provider.account.AccountConsoleCaller;
-import com.khalibre.keycloak.provider.privacyIdea.PrivacyIdeaSettings;
-import com.khalibre.keycloak.provider.privacyIdea.service.PrivacyIdeaService;
-import com.khalibre.keycloak.provider.telegram.bot.TelegramBotClient;
-import com.khalibre.keycloak.provider.telegram.idp.TelegramIdentityProvider;
-import com.khalibre.keycloak.provider.telegram.state.AuthState;
-import com.khalibre.keycloak.provider.telegram.state.AuthStateCache;
-import com.khalibre.keycloak.provider.telegram.state.AuthStateSession;
 
 /**
  * Lets a user manage their own MFA channels from the account console.
@@ -111,10 +109,9 @@ public class EdcMfaSettingsResource implements org.keycloak.services.resource.Re
   @Path("channels")
   @Produces(MediaType.APPLICATION_JSON)
   public Response channels(@Context UriInfo uriInfo, @Context HttpHeaders headers) {
-    UserModel user = caller(uriInfo, headers);
-    if (user == null) {
-      throw new NotAuthorizedException("Bearer token required");
-    }
+    Caller caller = requireCaller(uriInfo, headers);
+    UserModel user = caller.user();
+    ClientModel client = caller.client();
 
     PrivacyIdeaService privacyIdea = privacyIdea();
 
@@ -132,41 +129,54 @@ public class EdcMfaSettingsResource implements org.keycloak.services.resource.Re
     }
 
     Map<String, String> detected =
-        EdcChannelDetector.detect(session, privacyIdea, user);
+        EdcChannelDetector.detect(session, privacyIdea, user, client);
 
     Map<String, Object> result = new LinkedHashMap<>();
-    result.put("telegram", telegramState(detected, user));
-    result.put("totp", codeChannelState(CHANNEL_TOTP, TYPE_TOTP, user, adminToken, privacyIdea,
-        detected));
-    result.put("email", emailState(detected, user, adminToken, privacyIdea));
-    result.put("backupCode", backupCodeState(user, adminToken, privacyIdea));
-    result.put("available", reachable ? availableChannels(user, detected) : List.of());
+    result.put("telegram", telegramState(user, client, detected));
+    result.put("totp", codeChannelState(CHANNEL_TOTP, TYPE_TOTP, user, client, adminToken,
+        privacyIdea, detected));
+    result.put("email", emailState(detected, user, client, adminToken, privacyIdea));
+    result.put("backupCode", backupCodeState(user, client, adminToken, privacyIdea));
+    result.put("available", reachable ? availableChannels(user, detected, client) : List.of());
     result.put("reachable", reachable);
-    result.put("enrolmentRequired", EdcEnrolmentState.requiresEnrolment(session, privacyIdea, user));
+    result.put("enrolmentRequired",
+        EdcEnrolmentState.requiresEnrolment(session, privacyIdea, user, client));
     result.put("telegramConfigured", EdcChannelDetector.isTelegramConfigured(session));
     result.put("emailAddressOnFile", EdcChannelDetector.hasEmailAddress(user));
     return json(result);
   }
 
-  private Map<String, Object> telegramState(Map<String, String> detected, UserModel user) {
+  private Map<String, Object> telegramState(UserModel user, ClientModel client,
+      Map<String, String> detected) {
     Map<String, Object> state = new LinkedHashMap<>();
     boolean active = "1".equals(detected.get(EdcMfaChannelsAuthenticator.NOTE_TELEGRAM));
     state.put("active", active);
     if (active) {
       state.put("label", detected.get(EdcMfaChannelsAuthenticator.NOTE_TELEGRAM_HANDLE));
     }
-    // Phone match requirement: only shown when user has telegram-require-phone-match enabled
-    String requirePhoneMatch = user.getFirstAttribute(TelegramIdentityProvider.ATTR_TG_REQUIRE_PHONE_MATCH);
-    state.put("requirePhoneMatch", !StringUtil.isBlank(requirePhoneMatch) && requirePhoneMatch.equalsIgnoreCase("true"));
+    state.put("configured", telegramLinked(user));
+    state.put("switchedOff", switchedOff(CHANNEL_TELEGRAM, client));
     return state;
   }
 
-  /** An authenticator-app channel. No label: it is not tied to a device the server can describe. */
+  /**
+   * An authenticator-app channel. No label: it is not tied to a device the server can describe.
+   *
+   * <p>{@code configured} is what separates "you have this set up" from "you have never set this
+   * up".
+   * {@code active} is the answer after the channel policy has been applied, so the two differ
+   * exactly when ICT has switched the channel off for somebody who had it - which is the case the
+   * page has to explain rather than hide, since a channel that silently vanishes reads as the
+   * user's own setup having been deleted.
+   */
   private Map<String, Object> codeChannelState(String channel, String type, UserModel user,
-      String adminToken, PrivacyIdeaService privacyIdea, Map<String, String> detected) {
+      ClientModel client, String adminToken, PrivacyIdeaService privacyIdea,
+      Map<String, String> detected) {
     Map<String, Object> state = new LinkedHashMap<>();
     state.put("active", "1".equals(detected.get(noteFor(channel))));
     PrivacyIdeaService.TokenInfo token = firstToken(user, type, adminToken, privacyIdea);
+    state.put("configured", token != null);
+    state.put("switchedOff", switchedOff(channel, client));
     if (token != null && token.since() != null) {
       state.put("since", token.since().toString());
     }
@@ -174,20 +184,61 @@ public class EdcMfaSettingsResource implements org.keycloak.services.resource.Re
   }
 
   private Map<String, Object> emailState(Map<String, String> detected, UserModel user,
-      String adminToken, PrivacyIdeaService privacyIdea) {
-    Map<String, Object> state = codeChannelState(CHANNEL_EMAIL, TYPE_SPASS, user, adminToken,
-        privacyIdea, detected);
+      ClientModel client, String adminToken, PrivacyIdeaService privacyIdea) {
+    Map<String, Object> state = codeChannelState(CHANNEL_EMAIL, TYPE_SPASS, user, client,
+        adminToken, privacyIdea, detected);
     if ("1".equals(detected.get(EdcMfaChannelsAuthenticator.NOTE_EMAIL))) {
       state.put("label", detected.get(EdcMfaChannelsAuthenticator.NOTE_EMAIL_MASKED));
     }
     return state;
   }
 
-  private Map<String, Object> backupCodeState(UserModel user, String adminToken,
+  /**
+   * Whether ICT has switched this channel off for the policy that applies here.
+   *
+   * <p>The client is threaded through rather than defaulted to null. Passing null answers with the
+   * realm's policy, which is right for the sign-in flow and wrong here: the "switched off" badge on
+   * this page has to agree with the add list next to it, and that list is already client-scoped.
+   * Two halves of one screen answering from two different policies is how a user ends up looking at
+   * a channel they cannot add and no explanation for it.
+   */
+  private boolean switchedOff(String channel, ClientModel client) {
+    return !EdcChannelPolicy.isEnabled(client, session.getContext().getRealm(),
+        policyNameFor(channel));
+  }
+
+  /**
+   * The map from the page's channel names to the policy's.
+   *
+   * <p>Spelled out because the two sets do not share a spelling: the page says {@code backupCode}
+   * where
+   * the policy does too, but the settings resource has its own {@code CHANNEL_*} constants and
+   * those are what arrive here.
+   */
+  private String policyNameFor(String channel) {
+    return switch (channel) {
+      case CHANNEL_TELEGRAM -> EdcChannelPolicy.TELEGRAM;
+      case CHANNEL_TOTP -> EdcChannelPolicy.TOTP;
+      case CHANNEL_EMAIL -> EdcChannelPolicy.EMAIL;
+      case CHANNEL_BACKUP_CODE -> EdcChannelPolicy.BACKUP_CODE;
+      default -> channel;
+    };
+  }
+
+  /**
+   * Whether this user has a Telegram chat linked, which outlives the SPASS token.
+   */
+  private boolean telegramLinked(UserModel user) {
+    return EdcChannelDetector.telegramChatId(session, user) != null;
+  }
+
+  private Map<String, Object> backupCodeState(UserModel user, ClientModel client, String adminToken,
       PrivacyIdeaService privacyIdea) {
     Map<String, Object> state = new LinkedHashMap<>();
     PrivacyIdeaService.TokenInfo token = firstToken(user, TYPE_TAN, adminToken, privacyIdea);
     state.put("active", token != null);
+    state.put("configured", token != null);
+    state.put("switchedOff", switchedOff(CHANNEL_BACKUP_CODE, client));
     if (token != null) {
       if (token.since() != null) {
         state.put("since", token.since().toString());
@@ -202,19 +253,27 @@ public class EdcMfaSettingsResource implements org.keycloak.services.resource.Re
   }
 
   /** Channels the user could turn on right now, excluding the ones already on. */
-  private List<String> availableChannels(UserModel user, Map<String, String> detected) {
+  private List<String> availableChannels(UserModel user, Map<String, String> detected, ClientModel client) {
     java.util.ArrayList<String> available = new java.util.ArrayList<>();
-    if (EdcChannelDetector.isTelegramConfigured(session)
+    // A channel ICT has switched off is not offered here either. The detector has already withdrawn
+    // it from `detected`, so a user holding one simply does not see it as switchable-on - but that is
+    // the *remove* path. Without these checks the add list would still offer it, and start() would
+    // happily create the token, which is a self-service bypass of the admin switch.
+    RealmModel realm = session.getContext().getRealm();
+    if (EdcChannelPolicy.isEnabled(client, realm, EdcChannelPolicy.TELEGRAM)
+        && EdcChannelDetector.isTelegramConfigured(session)
         && !"1".equals(detected.get(EdcMfaChannelsAuthenticator.NOTE_TELEGRAM))) {
       available.add(CHANNEL_TELEGRAM);
     }
-    if (!"1".equals(detected.get(EdcMfaChannelsAuthenticator.NOTE_TOTP))) {
+    if (EdcChannelPolicy.isEnabled(client, realm, CHANNEL_TOTP)
+        && !"1".equals(detected.get(EdcMfaChannelsAuthenticator.NOTE_TOTP))) {
       available.add(CHANNEL_TOTP);
     }
     // A SPASS token carries both Email and Telegram, so Email reads as on whenever one exists. It is
     // therefore not offered to someone who already has Telegram via that same token - there is
     // nothing to switch on, and offering it would produce a no-op button.
-    if (EdcChannelDetector.hasEmailAddress(user)
+    if (EdcChannelPolicy.isEnabled(client, realm, CHANNEL_EMAIL)
+        && EdcChannelDetector.hasEmailAddress(user)
         && !"1".equals(detected.get(EdcMfaChannelsAuthenticator.NOTE_EMAIL))) {
       available.add(CHANNEL_EMAIL);
     }
@@ -236,10 +295,8 @@ public class EdcMfaSettingsResource implements org.keycloak.services.resource.Re
   @Produces(MediaType.APPLICATION_JSON)
   public Response remove(@PathParam("channel") String channel, @Context UriInfo uriInfo,
       @Context HttpHeaders headers) {
-    UserModel user = caller(uriInfo, headers);
-    if (user == null) {
-      throw new NotAuthorizedException("Bearer token required");
-    }
+    Caller caller = requireCaller(uriInfo, headers);
+    UserModel user = caller.user();
     RealmModel realm = session.getContext().getRealm();
 
     Map<String, Object> result = new LinkedHashMap<>();
@@ -288,7 +345,7 @@ public class EdcMfaSettingsResource implements org.keycloak.services.resource.Re
     // Removing a channel is enrolment all over again only if it was the last one. Re-derived here
     // rather than guessed, because Email and Telegram share a token and removing one can take the
     // other with it.
-    Map<String, String> after = EdcChannelDetector.detect(session, privacyIdea(), user);
+    Map<String, String> after = EdcChannelDetector.detect(session, privacyIdea(), user, caller.client());
     boolean stranded = EdcChannelDetector.hasNoUsableChannel(after);
     result.put("willNeedEnrolment", stranded);
     if (stranded) {
@@ -316,15 +373,29 @@ public class EdcMfaSettingsResource implements org.keycloak.services.resource.Re
   @Produces(MediaType.APPLICATION_JSON)
   public Response start(@PathParam("channel") String channel, @Context UriInfo uriInfo,
       @Context HttpHeaders headers) {
-    UserModel user = caller(uriInfo, headers);
-    if (user == null) {
-      throw new NotAuthorizedException("Bearer token required");
-    }
+    Caller caller = requireCaller(uriInfo, headers);
+    UserModel user = caller.user();
+    ClientModel client = caller.client();
 
     try {
+      // Server-side, not just hidden in the UI: the add list is a convenience, and this is the check
+      // that makes the admin switch mean anything. Without it a user could post to a channel that
+      // ICT switched off and enrol on it anyway.
+      //
+      // Client-scoped, because the switch can be per-application and this is the write that would
+      // enact it. Checking the realm default here instead would leave the application's own
+      // "switched off" enforced by nothing at all - the one path where a policy that looks in force
+      // is not.
+      if (!EdcChannelPolicy.isEnabled(client, session.getContext().getRealm(), channel)) {
+        log.warnf("method=start user=%s channel=%s status=REJECTED "
+            + "message=Channel is switched off for this policy", user.getUsername(), channel);
+        return Response.status(Response.Status.FORBIDDEN)
+            .entity(Map.of("error", "This channel is switched off", "channel", channel))
+            .build();
+      }
       return switch (channel) {
         case CHANNEL_TOTP -> startTotp(user);
-        case CHANNEL_EMAIL -> startEmail(user);
+        case CHANNEL_EMAIL -> startEmail(user, client);
         case CHANNEL_TELEGRAM -> startTelegramScan(user);
         default -> Response.status(Response.Status.BAD_REQUEST)
             .entity(Map.of("error", "Unknown channel")).build();
@@ -353,7 +424,7 @@ public class EdcMfaSettingsResource implements org.keycloak.services.resource.Re
         "codeLength", settings.backupCodeLength()));
   }
 
-  private Response startEmail(UserModel user) throws Exception {
+  private Response startEmail(UserModel user, ClientModel client) throws Exception {
     if (!EdcChannelDetector.hasEmailAddress(user)) {
       return Response.status(Response.Status.CONFLICT)
           .entity(Map.of("error", "No email address on file")).build();
@@ -369,8 +440,8 @@ public class EdcMfaSettingsResource implements org.keycloak.services.resource.Re
 
     // Proving the address works is the point: a code is sent, and the channel is only marked on once
     // the user has typed it back.
-    EdcOtpDelivery.issue(session, session.getContext().getRealm(), user, settings, privacyIdea,
-        adminToken, serial, clientIp());
+    EdcOtpDelivery.issue(session, session.getContext().getRealm(), client, user, settings,
+        privacyIdea, adminToken, serial, clientIp());
 
     return json(Map.of("channel", CHANNEL_EMAIL,
         "label", EdcChannelDetector.maskEmail(user.getFirstAttribute("email")),
@@ -424,10 +495,7 @@ public class EdcMfaSettingsResource implements org.keycloak.services.resource.Re
   @Produces(MediaType.APPLICATION_JSON)
   public Response verify(@PathParam("channel") String channel, Map<String, String> body,
       @Context UriInfo uriInfo, @Context HttpHeaders headers) {
-    UserModel user = caller(uriInfo, headers);
-    if (user == null) {
-      throw new NotAuthorizedException("Bearer token required");
-    }
+    UserModel user = requireCaller(uriInfo, headers).user();
     RealmModel realm = session.getContext().getRealm();
 
     try {
@@ -496,10 +564,8 @@ public class EdcMfaSettingsResource implements org.keycloak.services.resource.Re
   @Path("channels/telegram/scan")
   @Produces(MediaType.APPLICATION_JSON)
   public Response telegramScan(@Context UriInfo uriInfo, @Context HttpHeaders headers) {
-    UserModel user = caller(uriInfo, headers);
-    if (user == null) {
-      throw new NotAuthorizedException("Bearer token required");
-    }
+    UserModel user = requireCaller(uriInfo, headers).user();
+    RealmModel realm = session.getContext().getRealm();
 
     AuthState state = AuthStateSession.get(scanKey(user));
     if (state == null) {
@@ -568,10 +634,7 @@ log.infof("method=telegramScan user=%s scanKey=%s stateId=%s message=Expired",
   @Path("channels/backupCode/regenerate")
   @Produces(MediaType.APPLICATION_JSON)
   public Response regenerateBackupCodes(@Context UriInfo uriInfo, @Context HttpHeaders headers) {
-    UserModel user = caller(uriInfo, headers);
-    if (user == null) {
-      throw new NotAuthorizedException("Bearer token required");
-    }
+    UserModel user = requireCaller(uriInfo, headers).user();
     try {
       PrivacyIdeaSettings.Settings settings = settings();
       PrivacyIdeaService privacyIdea = privacyIdea();
@@ -645,15 +708,67 @@ log.infof("method=telegramScan user=%s scanKey=%s stateId=%s message=Expired",
         .build();
   }
 
-  private UserModel caller(UriInfo uriInfo, HttpHeaders headers) {
-    callerSessionId = null;
-    AccountConsoleCaller.CallerContext callerContext =
-        AccountConsoleCaller.resolveContext(session, uriInfo, headers);
-    if (callerContext == null) {
+  /**
+   * The authenticated caller, and the client whose channel policy applies to them.
+   *
+   * <p>Resolved once per request and passed to everything that needs it. The two halves answer
+   * different questions and have to come from the same token: the user is who they are, and the
+   * client is whose policy governs which channels they may use. Reading them separately meant this
+   * class authenticated the bearer token twice per request and then - worse - used the realm's
+   * policy on one path and the client's on another.
+   */
+  private record Caller(UserModel user, ClientModel client) {
+
+  }
+
+  private Caller caller(UriInfo uriInfo, HttpHeaders headers) {
+    AccountConsoleCaller.Caller resolved =
+        AccountConsoleCaller.resolveCaller(session, uriInfo, headers);
+    return resolved == null ? null : new Caller(resolved.user(), policyClient(resolved.token()));
+  }
+
+  /**
+   * The caller, or a 401.
+   *
+   * <p>Every endpoint here acts on the caller and nobody else, so there is no path that can do
+   * anything useful without them - a null check at each call site was one line each and three times
+   * over, and it is exactly the kind of thing that gets dropped when a fourth endpoint is added.
+   */
+  private Caller requireCaller(UriInfo uriInfo, HttpHeaders headers) {
+    Caller caller = caller(uriInfo, headers);
+    if (caller == null) {
+      throw new NotAuthorizedException("Bearer token required");
+    }
+    return caller;
+  }
+
+  /**
+   * The client this token was issued for, which is the one whose policy applies.
+   *
+   * <p>{@code azp}, not the audience: the audience is {@code account}, which every console session
+   * shares and which names no policy. {@code azp} names the client the token was actually requested
+   * for.
+   *
+   * <p>On the stock account console this resolves to {@code account-console}, which is a Keycloak
+   * built-in and therefore cannot carry a policy of its own - so today it always reads the realm
+   * default. It is resolved rather than hard-coded so that a console reached through any other
+   * client is governed by that client's policy instead, and so the answer and the check on
+   * {@code start()} can never come from different places.
+   */
+  private ClientModel policyClient(org.keycloak.representations.AccessToken token) {
+    if (token == null) {
       return null;
     }
-    callerSessionId = callerContext.sessionId();
-    return callerContext.user();
+    String clientId = token.getIssuedFor();
+    if (clientId == null || clientId.isBlank()) {
+      return null;
+    }
+    try {
+      return session.getContext().getRealm().getClientByClientId(clientId);
+    } catch (Exception e) {
+      log.warnf("method=policyClient client=%s error=%s", clientId, e.getMessage());
+      return null;
+    }
   }
 
   private PrivacyIdeaSettings.Settings settings() {
