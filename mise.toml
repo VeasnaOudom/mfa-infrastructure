@@ -122,6 +122,43 @@ rm -rf databases/*.tar.gz
 echo "Removed stack, volumes, generated files, and database backups."
 '''
 
+[tasks."telegram:init"]
+description = "Start the Telegram bot's long poll, which nothing does on boot (wait for Keycloak first)"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+
+# The bot does not start itself: postInit is deliberately a no-op, so after every restart Keycloak is
+# up and serving while the bot is silent. Nothing logs that - the first symptom is a user who scanned
+# the QR code and saw no phone prompt, which reads as a broken link rather than a bot that never woke
+# up. Every task here that restarts Keycloak calls this one; a bare `docker restart mfa-keycloak` still
+# needs it by hand.
+#
+# Polling is safe to start twice - TelegramBotManager.startPolling returns early when the alias is
+# already registered - so this is also the manual retry if the bot ever wedges.
+set -a; source .env; set +a
+realm="$(docker exec mfa-mariadb mariadb -uroot -p"${MYSQL_ROOT_PASSWORD}" -N -B \
+  -e "SELECT NAME FROM ${KEYCLOAK_DB_NAME}.REALM WHERE ACCOUNT_THEME IS NOT NULL LIMIT 1;" \
+  2>/dev/null | head -n1 || true)"
+if [ -z "${realm}" ]; then
+  realm=EDC
+  echo "==> Could not read the realm from the database; assuming ${realm}."
+fi
+
+echo "==> Waiting for Keycloak..."
+for _ in $(seq 1 60); do
+  if curl -skf -o /dev/null "https://${KEYCLOAK_HOST}/realms/${realm}/.well-known/openid-configuration"; then
+    break
+  fi
+  sleep 2
+done
+
+echo "==> Starting the Telegram bot..."
+curl -sk -X POST "https://${KEYCLOAK_HOST}/realms/${realm}/telegram-auth/telegram/init"
+echo ""
+echo "   Watch for: [TelegramBotManager] Started polling for bot: telegram"
+'''
+
 [tasks."start:keycloak"]
 description = "Start Keycloak service"
 run = '''
@@ -130,6 +167,7 @@ set -euo pipefail
 mise run build:keycloak
 mise run build:keycloak-providers
 docker compose up -d keycloak
+mise run telegram:init
 '''
 
 [tasks."build:keycloak"]
@@ -344,6 +382,12 @@ cd khalibre-account-ui
 npm ci --no-audit --no-fund 2>/dev/null || npm install --no-audit --no-fund
 npm run build
 
+# target/ is what Maven packages, and vite empties only dist/, so every build leaves the previous
+# build's hashed chunks behind in it. Fourteen generations of MfaChannels-*.js once shipped that way,
+# and the newest source change was absent from all of them - the page silently served a build from
+# weeks earlier. Clearing target/ makes the JAR match the source by construction.
+rm -rf target
+
 mvn -q package -DskipTests -Dskip.installnodenpm -Dskip.npm
 
 cd ..
@@ -356,6 +400,108 @@ echo "=> Built theme JAR: ${jar_file}"
 echo "=> Copied to: keycloak-providers/$(basename "${jar_file}")"
 '''
 
+[tasks."build:khalibre-admin-ui"]
+description = "Build the khalibre-admin-ui theme JAR (downloads the pinned Keycloak console source on first run) into target/ and copy it to keycloak-providers/"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+
+# The admin console is a React app with no plugin hook, so our page is patched into a pinned checkout
+# of Keycloak's own JS sources and built there - see khalibre-admin-ui/scripts/patch-admin-ui.mjs.
+# That checkout is a build input, not a dependency of this repository, so it is fetched on first use
+# into build/ (gitignored) and then reused. KEYCLOAK_JS_DIR overrides it, e.g. to point at a checkout
+# you already have; the fetch is skipped whenever the directory it names exists.
+KC_VERSION=26.1.3
+KC_DIR="${KEYCLOAK_JS_DIR:-build/keycloak-${KC_VERSION}}"
+KC_JS="${KC_DIR}/js"
+KC_ZIP="${KC_DIR}.zip"
+
+if [ ! -d "${KC_JS}/apps/admin-ui" ]; then
+  echo "==> Fetching the Keycloak ${KC_VERSION} console sources (~50MB, once)..."
+  mkdir -p "$(dirname "${KC_DIR}")"
+  if [ ! -f "${KC_ZIP}" ]; then
+    curl -fsSL -o "${KC_ZIP}" \\
+      "https://github.com/keycloak/keycloak/archive/refs/tags/${KC_VERSION}.zip"
+  fi
+  # The archive unpacks to keycloak-<version>/; -j keeps the archive next to it rather than inside.
+  unzip -q -o "${KC_ZIP}" -d "$(dirname "${KC_DIR}")"
+fi
+
+[ -d "${KC_JS}/apps/admin-ui" ] || { echo "Error: no admin-ui under ${KC_JS}"; exit 1; }
+
+# mise tasks do not inherit the interactive shell, so nvm-managed node is missing.
+if ! command -v node >/dev/null 2>&1; then
+  export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+  # shellcheck disable=SC1091
+  [ -s "${NVM_DIR}/nvm.sh" ] && . "${NVM_DIR}/nvm.sh"
+fi
+command -v node >/dev/null 2>&1 || { echo "Error: node not found (nvm not loaded)."; exit 1; }
+
+# pnpm is pinned by the checkout's packageManager field, so corepack resolves the right version
+# rather than whatever happens to be on PATH.
+export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+pnpm_cmd=(corepack pnpm)
+
+if [ ! -d "${KC_JS}/node_modules" ]; then
+  echo "==> Installing the console's dependencies (once, this is the slow part)..."
+  ( cd "${KC_JS}" && "${pnpm_cmd[@]}" install --frozen-lockfile )
+fi
+
+# Copies src/mfa into the checkout and patches the route table, the sidebar and the output
+# directory. Idempotent, so this runs on every build.
+( cd khalibre-admin-ui && npm run patch )
+
+echo "==> Building the console..."
+# The Vite build carries vite-plugin-checker, so the console's tsconfig type-checks the page under
+# `strict: true` while it bundles. A type error fails here rather than in a console that ICT sees.
+# Vite writes to khalibre-admin-ui/target/console, which is outside its root, so it cannot empty
+# it: each build leaves the last one's hashed chunks behind and the theme JAR grows by megabytes of
+# dead code. Clear it first. It must be cleared BEFORE the vite build, not after - clearing it
+# afterwards deletes the output the build just produced and packages an empty theme, which is a
+# console with no page at all rather than a stale one.
+rm -rf khalibre-admin-ui/target
+
+# ...and wireit's cache has to go with it. This is not tidiness: wireit decides whether to re-run from
+# the files it declares, and the directory the build actually writes to is not one of them - the
+# patch script points vite's outDir at khalibre-admin-ui/target/console while the script's own
+# `output` still names an upstream path. So deleting the output leaves wireit convinced the build is
+# up to date, it skips the build, and the task fails on a missing manifest - which looks exactly like
+# a broken checkout rather than a stale cache.
+rm -rf "${KC_JS}/apps/admin-ui/.wireit"
+
+( cd "${KC_JS}/apps/admin-ui" && "${pnpm_cmd[@]}" build )
+
+[ -f khalibre-admin-ui/target/console/.vite/manifest.json ] || {
+  echo "Error: the console build produced no manifest - check the output above."; exit 1; }
+
+mvn -q -f khalibre-admin-ui/pom.xml package -DskipTests
+
+mkdir -p keycloak-providers
+jar_file="$(ls -1t khalibre-admin-ui/target/khalibre-admin-ui-*.jar | head -n1)"
+cp -f "${jar_file}" "keycloak-providers/$(basename "${jar_file}")"
+
+echo ""
+echo "=> Built theme JAR: ${jar_file}"
+echo "=> Copied to: keycloak-providers/$(basename "${jar_file}")"
+echo ""
+echo "The console now runs this theme, so pick it for a realm (Realm settings -> Admin theme,"
+echo "or PUT /admin/realms/<realm> with an adminTheme of khalibre-admin) and restart Keycloak."
+'''
+
+[tasks."deploy:admin-ui"]
+description = "Build the khalibre-admin-ui theme and restart Keycloak to load it"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+mise run build:khalibre-admin-ui
+echo "==> Restarting Keycloak to load the new admin console theme..."
+docker restart mfa-keycloak
+mise run telegram:init
+echo ""
+echo "=> Deployment complete. Keycloak is restarting."
+echo "   Watch logs with:  mise run logs:keycloak"
+'''
+
 [tasks."deploy:khalibre-account-ui"]
 description = "Build the khalibre-account-ui theme and restart Keycloak to load it"
 run = '''
@@ -364,6 +510,7 @@ set -euo pipefail
 mise run build:khalibre-account-ui
 echo "==> Restarting Keycloak to load the new account UI theme..."
 docker restart mfa-keycloak
+mise run telegram:init
 echo ""
 echo "=> Deployment complete. Keycloak is restarting."
 echo "   Watch logs with:  mise run logs:keycloak"
@@ -437,6 +584,7 @@ cp -f "${provider_jar}" "keycloak-providers/$(basename "${provider_jar}")"
 #    at /opt/keycloak/providers, so just restart Keycloak to load it.
 echo "==> Restarting Keycloak to load the new provider..."
 docker restart mfa-keycloak
+mise run telegram:init
 
 echo ""
 echo "=> Deployment complete. Keycloak is restarting."
